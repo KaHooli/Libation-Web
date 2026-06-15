@@ -4,15 +4,25 @@ from typing import Optional
 
 from ..config import settings
 
-_DB = Path(settings.LIBATION_CONFIG) / "LibationData.db"
+def _db_path() -> Optional[Path]:
+    """Find the Libation database — name changed from LibationData.db to LibationContext.db in v13."""
+    config = Path(settings.LIBATION_CONFIG)
+    for name in ("LibationContext.db", "LibationData.db"):
+        p = config / name
+        if p.exists():
+            return p
+    return None
 
 
 def db_exists() -> bool:
-    return _DB.exists()
+    return _db_path() is not None
 
 
 def _connect():
-    conn = sqlite3.connect(str(_DB))
+    path = _db_path()
+    if not path:
+        raise FileNotFoundError("Libation database not found in /config")
+    conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     return conn
 
