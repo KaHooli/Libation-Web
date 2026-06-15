@@ -19,15 +19,14 @@ if [ "$PUID" != "0" ]; then
     useradd -u "$PUID" -g "$PGID" -s /bin/bash -M libation
   fi
 
-  # Fix ownership of runtime directories
-  chown -R libation:libation /data /config /audiobooks /app 2>/dev/null || true
-
-  # Bootstrap LibationCli settings on first run
+  # Bootstrap LibationCli settings on first run (before chown so ownership is correct)
   if [ ! -f /config/Settings.json ]; then
     echo '[Libation] Creating default Settings.json for LibationCli'
     echo '{"Books": "/audiobooks"}' > /config/Settings.json
-    chown libation:libation /config/Settings.json
   fi
+
+  # Fix ownership of runtime directories (after bootstrap so all files are covered)
+  chown -R libation:libation /data /config /audiobooks /app 2>/dev/null || true
 
   echo "[Libation] Running as UID=$PUID GID=$PGID"
   exec gosu libation uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
