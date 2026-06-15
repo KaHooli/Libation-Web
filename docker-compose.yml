@@ -1,0 +1,22 @@
+services:
+  libation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        LIBATION_VERSION: "13.4.9"
+    image: libation-web:latest
+    container_name: libation
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+      - ./config:/config
+      - ./audiobooks:/audiobooks
+    environment:
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin
+      - SECRET_KEY=change-me-use-a-long-random-string
+      - ACCESS_TOKEN_EXPIRE_MINUTES=15
+      - REFRESH_TOKEN_EXPIRE_DAYS=60
+    restart: unless-stopped

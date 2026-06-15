@@ -1,0 +1,23 @@
+# Runtime data
+data/
+config/
+audiobooks/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Env
+.env
+
+# OS
+.DS_Store
+Thumbs.db
