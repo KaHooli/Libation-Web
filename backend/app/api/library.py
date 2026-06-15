@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, RedirectResponse
 
 from .auth import get_current_user
 from ..schemas.library import LibraryResponse
-from ..services.libation import get_library, get_book_cover_path, get_books_by_account
+from ..services.libation import get_library, get_book_cover_path, get_cover_image_hash, get_books_by_account
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 
@@ -46,6 +46,12 @@ def my_books(
 @router.get("/covers/{book_id}")
 def get_cover(book_id: str):
     path = get_book_cover_path(book_id)
-    if not path:
-        return Response(status_code=404)
-    return FileResponse(str(path))
+    if path:
+        return FileResponse(str(path))
+    image_hash = get_cover_image_hash(book_id)
+    if image_hash:
+        return RedirectResponse(
+            url=f"https://m.media-amazon.com/images/I/{image_hash}._SL500_.jpg",
+            status_code=302,
+        )
+    return Response(status_code=404)
