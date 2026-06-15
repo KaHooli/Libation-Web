@@ -5,7 +5,7 @@ from typing import Callable, Awaitable, Optional
 
 from ..config import settings
 
-_PENDING_LOGINS: dict[str, asyncio.subprocess.Process] = {}
+_PENDING_LOGINS: dict[str, dict] = {}  # session_id → {email, locale}
 
 
 def _cmd(*args: str) -> list[str]:
@@ -36,55 +36,40 @@ async def list_accounts() -> list[dict]:
 
 
 async def start_login(email: str, locale: str) -> dict:
-    """Start login-external, capture the login URL, keep process alive for step 2."""
+    """Run login-external to get the Audible login URL.
+
+    LibationCli v13+ detects non-TTY stdin and exits after printing the URL,
+    expecting a second invocation with --response-url to complete login.
+    """
     proc = await asyncio.create_subprocess_exec(
         *_cmd("login-external", "-a", email, "-l", locale),
-        stdin=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
 
-    login_url: Optional[str] = None
-    full_output: list[str] = []
-
-    async def _read_until_url() -> None:
-        nonlocal login_url
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            text = line.decode()
-            full_output.append(text.strip())
-            match = re.search(r"https://www\.amazon\.[^\s]+", text)
-            if match:
-                login_url = match.group(0).rstrip(".")
-                break
-
     try:
-        await asyncio.wait_for(_read_until_url(), timeout=30)
+        stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
     except asyncio.TimeoutError:
         proc.kill()
-        raise RuntimeError("Timed out waiting for login URL")
+        raise RuntimeError("Timed out waiting for LibationCli login URL")
 
-    if not login_url:
-        code = await proc.wait()
+    output = stdout_bytes.decode()
+    match = re.search(r"https://www\.amazon\.[^\s]+", output)
+    if not match:
         raise RuntimeError(
-            f"LibationCli exited ({code}) without producing a login URL.\n"
-            + "\n".join(full_output)
+            f"LibationCli exited ({proc.returncode}) without producing a login URL.\n"
+            + output
         )
 
+    login_url = match.group(0).rstrip(".")
     session_id = str(uuid.uuid4())
-    _PENDING_LOGINS[session_id] = proc
+    _PENDING_LOGINS[session_id] = {"email": email, "locale": locale}
 
     # Auto-expire session after 10 minutes
     async def _expire():
         await asyncio.sleep(600)
-        p = _PENDING_LOGINS.pop(session_id, None)
-        if p:
-            try:
-                p.kill()
-            except Exception:
-                pass
+        _PENDING_LOGINS.pop(session_id, None)
 
     asyncio.create_task(_expire())
 
@@ -92,23 +77,28 @@ async def start_login(email: str, locale: str) -> dict:
 
 
 async def complete_login(session_id: str, response_url: str) -> str:
-    """Feed the response URL to the waiting process and collect output."""
-    proc = _PENDING_LOGINS.pop(session_id, None)
-    if proc is None:
+    """Complete login by re-invoking login-external with --response-url."""
+    session = _PENDING_LOGINS.pop(session_id, None)
+    if session is None:
         raise KeyError("Login session not found or expired")
 
-    proc.stdin.write(f"{response_url}\n".encode())
-    await proc.stdin.drain()
+    proc = await asyncio.create_subprocess_exec(
+        *_cmd("login-external",
+              "-a", session["email"],
+              "-l", session["locale"],
+              "--response-url", response_url),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
 
     try:
-        stdout_remaining, _ = await asyncio.wait_for(
-            proc.communicate(), timeout=60
-        )
+        stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
     except asyncio.TimeoutError:
         proc.kill()
         raise RuntimeError("Timed out completing login")
 
-    output = stdout_remaining.decode()
+    output = stdout_bytes.decode()
     if proc.returncode != 0:
         raise RuntimeError(f"Login failed (exit {proc.returncode}).\n{output}")
 
