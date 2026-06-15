@@ -131,8 +131,8 @@ def _v13_selects(include_description=True, date_added_account: Optional[str] = N
         # Series name
         "(SELECT s.Name FROM SeriesBook sb JOIN Series s ON sb.SeriesId=s.SeriesId "
         " WHERE sb.BookId=b.BookId LIMIT 1) AS series_name",
-        # Series index
-        "(SELECT sb.Order FROM SeriesBook sb WHERE sb.BookId=b.BookId LIMIT 1) AS series_index",
+        # Series index ("Order" is a reserved word — must be quoted)
+        '(SELECT sb."Order" FROM SeriesBook sb WHERE sb.BookId=b.BookId LIMIT 1) AS series_index',
     ]
     if include_description:
         selects.append("b.Description AS description")
