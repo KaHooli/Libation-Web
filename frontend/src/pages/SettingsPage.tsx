@@ -135,6 +135,62 @@ function TwoFactorSection() {
   );
 }
 
+// ── Change Username Section ──────────────────────────────────────────────────
+
+function ChangeUsernameSection() {
+  const { user, refreshUser } = useAuth();
+  const [newUsername, setNewUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(""); setSuccess("");
+    if (newUsername.trim().length < 3) { setError("Username must be at least 3 characters."); return; }
+    if (newUsername.trim() === user?.username) { setError("That is already your username."); return; }
+    setLoading(true);
+    try {
+      await authApi.changeUsername(newUsername.trim(), password);
+      await refreshUser();
+      setSuccess("Username updated.");
+      setNewUsername(""); setPassword("");
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail ?? "Failed to update username.";
+      setError(msg);
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldAlert className="h-5 w-5 text-brand-600" />
+          Change username
+        </CardTitle>
+        <CardDescription>Current username: <strong>{user?.username}</strong></CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4 max-w-sm">
+          {error && <Alert variant="error">{error}</Alert>}
+          {success && <Alert variant="success">{success}</Alert>}
+          <div>
+            <Label htmlFor="new-username">New username</Label>
+            <Input id="new-username" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} required minLength={3} />
+          </div>
+          <div>
+            <Label htmlFor="cu-password">Current password</Label>
+            <Input id="cu-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </div>
+          <Button type="submit" loading={loading}>Update username</Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Change Password Section ──────────────────────────────────────────────────
 
 function ChangePasswordSection() {
@@ -775,6 +831,7 @@ export function SettingsPage() {
       {user?.is_admin && <UserPermissionsSection />}
       <SessionsSection />
       <TwoFactorSection />
+      <ChangeUsernameSection />
       <ChangePasswordSection />
       {user?.is_admin && <ApiDocsSection />}
     </div>

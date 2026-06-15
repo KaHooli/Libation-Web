@@ -70,6 +70,9 @@ export const authApi = {
   changePassword: (current_password: string, new_password: string) =>
     api.post("/auth/change-password", { current_password, new_password }),
 
+  changeUsername: (new_username: string, current_password: string) =>
+    api.post("/auth/change-username", { new_username, current_password }),
+
   updateMe: (patch: { audible_account_id?: string }) =>
     api.patch("/auth/me", patch),
 

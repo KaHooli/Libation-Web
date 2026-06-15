@@ -7,6 +7,7 @@ from ..schemas.auth import (
     LoginRequest, TwoFactorRequest, EnableTwoFactorRequest,
     DisableTwoFactorRequest, TokenResponse, TwoFactorRequiredResponse,
     UserResponse, SetupTwoFactorResponse, MessageResponse, ChangePasswordRequest,
+    ChangeUsernameRequest,
 )
 from ..schemas.users import SessionResponse
 from ..services import auth as auth_svc
@@ -213,6 +214,26 @@ def change_password(
     db.commit()
     auth_svc.revoke_all_sessions(db, current_user.id)
     return MessageResponse(message="Password changed. Please log in again.")
+
+
+@router.post("/change-username", response_model=UserResponse)
+def change_username(
+    body: ChangeUsernameRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not auth_svc.verify_password(body.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
+    new_username = body.new_username.strip()
+    if len(new_username) < 3:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Username must be at least 3 characters")
+    from ..models.user import User
+    if db.query(User).filter(User.username == new_username, User.id != current_user.id).first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
+    current_user.username = new_username
+    db.commit()
+    db.refresh(current_user)
+    return UserResponse.model_validate(current_user)
 
 
 @router.get("/sessions", response_model=list[SessionResponse])
