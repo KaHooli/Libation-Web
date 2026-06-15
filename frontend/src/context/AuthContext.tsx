@@ -5,6 +5,7 @@ interface User {
   id: number;
   username: string;
   totp_enabled: boolean;
+  is_admin: boolean;
 }
 
 interface AuthContextValue {

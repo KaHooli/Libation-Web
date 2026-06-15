@@ -15,14 +15,14 @@ export function Layout() {
   const title = PAGE_TITLES[pathname] ?? "Libation";
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-900 overflow-hidden">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
-        <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 shrink-0">
+        <header className="flex items-center gap-3 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 shrink-0">
           <MobileMenuButton onClick={() => setSidebarOpen(true)} />
-          <h1 className="text-base font-semibold text-slate-900">{title}</h1>
+          <h1 className="text-base font-semibold text-slate-900 dark:text-slate-100">{title}</h1>
         </header>
 
         {/* Main content */}

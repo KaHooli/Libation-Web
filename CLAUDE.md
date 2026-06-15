@@ -72,10 +72,42 @@ docker compose up --build
 - Background tasks update DB rows as progress changes; frontend polls `/api/downloads` every 2s
 - Duplicate active downloads blocked with 409
 
+## User management (`backend/app/api/users.py`)
+- Admin-only routes behind `require_admin` dependency
+- `GET /api/users`, `POST /api/users`, `PATCH /api/users/{id}`, `DELETE /api/users/{id}`
+- Cannot delete own account, cannot revoke own admin status
+- `is_admin` column added via startup migration (`_migrate_db`) using `ALTER TABLE` + `PRAGMA table_info`
+
+## Settings & Stats (`backend/app/api/settings.py`)
+- `GET/PUT /api/settings/libation` — reads/writes `/config/appsettings.json` (resilient: merges only known keys)
+- `GET /api/settings/stats` — total_books (LibationData.db), total_downloads (our DB), accounts_count (LibationCli), downloads_per_user (JOIN)
+- Field map: Python snake_case ↔ Libation PascalCase key names
+
+## Rate limiting
+- `slowapi` on `/api/auth/login` (20/min) and `/api/auth/verify-2fa` (10/min)
+- Limiter instance in `backend/app/limiter.py` (separate to avoid circular imports)
+
+## Dark mode
+- `tailwind.config.js` has `darkMode: "class"` — `dark` class applied to `<html>` element
+- `ThemeContext.tsx` persists choice to `localStorage`, toggles `<html class="dark">`
+- Toggle button in sidebar (Moon/Sun icon)
+- Dark mode variants added to: Layout, Sidebar, Card, Input components, LibraryPage inline inputs
+
+## PUID/PGID (Unraid support)
+- `docker-entrypoint.sh` creates/modifies `libation` user/group at runtime using env vars PUID/PGID
+- Uses `gosu` to drop privileges before exec'ing uvicorn
+- Defaults to PUID=1000, PGID=1000; runs as root if PUID=0
+- `unraid-template.xml` — Unraid Community Applications template (PUID=99, PGID=100 defaults for Unraid)
+
+## Health check
+- `GET /api/health` — public endpoint returning `{"status": "ok", "version": "0.4.0"}`
+- Dockerfile HEALTHCHECK uses `/api/health` instead of `/api/auth/me`
+
 ## Phase history
 - **Phase 1** (complete): Project foundation, Docker setup, full auth system (login, 2FA, 60-day sessions, change password), React UI shell with sidebar navigation.
 - **Phase 2** (complete): Library view — reads Libation SQLite DB, grid/list book view with cover art, search, sort, pagination, book detail slide-over, empty states.
 - **Phase 3** (complete): Accounts & Downloads — add Audible accounts via `login-external` OAuth flow, library scan, per-book downloads via `liberate`, downloads page with progress polling, download button on book cards.
+- **Phase 4** (complete): Settings & Polish — dashboard stat cards, Libation settings passthrough, multiple user management (admin CRUD), session management (list/revoke), dark mode toggle, PUID/PGID support, Unraid CA template, rate limiting on auth endpoints, improved health check.
 
 ## Conventions
 - API routes: `/api/<resource>/<action>`

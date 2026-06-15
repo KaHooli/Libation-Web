@@ -31,6 +31,18 @@ def _schema(conn) -> dict[str, set[str]]:
     }
 
 
+def count_books() -> int:
+    if not db_exists():
+        return 0
+    try:
+        conn = _connect()
+        total = conn.execute("SELECT COUNT(*) FROM Books").fetchone()[0]
+        conn.close()
+        return total
+    except Exception:
+        return 0
+
+
 def get_book_cover_path(book_id: str) -> Optional[Path]:
     if not db_exists():
         return None

@@ -19,4 +19,6 @@ services:
       - SECRET_KEY=change-me-use-a-long-random-string
       - ACCESS_TOKEN_EXPIRE_MINUTES=15
       - REFRESH_TOKEN_EXPIRE_DAYS=60
+      - PUID=1000
+      - PGID=1000
     restart: unless-stopped

@@ -35,6 +35,7 @@ class UserResponse(BaseModel):
     id: int
     username: str
     totp_enabled: bool
+    is_admin: bool = False
 
     model_config = {"from_attributes": True}
 

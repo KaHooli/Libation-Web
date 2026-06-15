@@ -1,22 +1,42 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .database import engine, SessionLocal, Base
 from .models import user as user_models  # noqa: F401 — registers models
+from .models import download as download_models  # noqa: F401 — registers models
 from .api import auth as auth_router
 from .api import library as library_router
 from .api import accounts as accounts_router
 from .api import downloads as downloads_router
-from .models import download as download_models  # noqa: F401 — registers models
+from .api import users as users_router
+from .api import settings as settings_router
 from .services.auth import hash_password, get_user_by_username
 from .models.user import User
 from .config import settings
+from .limiter import limiter
+
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+
+def _migrate_db(db: Session) -> None:
+    """Add columns that were introduced after initial deployment."""
+    conn = db.connection()
+    users_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
+    if "is_admin" not in users_cols:
+        conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"))
+        conn.execute(text(
+            f"UPDATE users SET is_admin = 1 WHERE username = :u"
+        ), {"u": settings.ADMIN_USERNAME})
+        db.commit()
+        print("[Libation] Migrated: added is_admin column")
 
 
 def _seed_admin(db: Session) -> None:
@@ -24,9 +44,15 @@ def _seed_admin(db: Session) -> None:
         db.add(User(
             username=settings.ADMIN_USERNAME,
             hashed_password=hash_password(settings.ADMIN_PASSWORD),
+            is_admin=True,
         ))
         db.commit()
         print(f"[Libation] Created admin user: {settings.ADMIN_USERNAME!r}")
+    else:
+        existing = get_user_by_username(db, settings.ADMIN_USERNAME)
+        if existing and not existing.is_admin:
+            existing.is_admin = True
+            db.commit()
 
 
 @asynccontextmanager
@@ -34,11 +60,15 @@ async def lifespan(app: FastAPI):
     os.makedirs("/data", exist_ok=True)
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
+        _migrate_db(db)
         _seed_admin(db)
     yield
 
 
-app = FastAPI(title="Libation API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Libation API", version="0.4.0", lifespan=lifespan)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,6 +82,14 @@ app.include_router(auth_router.router)
 app.include_router(library_router.router)
 app.include_router(accounts_router.router)
 app.include_router(downloads_router.router)
+app.include_router(users_router.router)
+app.include_router(settings_router.router)
+
+
+@app.get("/api/health", include_in_schema=False)
+def health():
+    return JSONResponse({"status": "ok", "version": "0.4.0"})
+
 
 # Serve React build — must come after API routes
 STATIC_DIR = "/app/static"

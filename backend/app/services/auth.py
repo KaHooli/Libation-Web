@@ -160,3 +160,24 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     if not verify_password(password, user.hashed_password):
         return None
     return user
+
+
+def get_sessions_for_user(db: Session, user_id: int) -> list[UserSession]:
+    now = datetime.now(timezone.utc)
+    return (
+        db.query(UserSession)
+        .filter(UserSession.user_id == user_id, UserSession.expires_at > now)
+        .order_by(UserSession.last_used_at.desc())
+        .all()
+    )
+
+
+def revoke_session_by_id(db: Session, session_id: int, user_id: int) -> bool:
+    session = db.query(UserSession).filter(
+        UserSession.id == session_id, UserSession.user_id == user_id
+    ).first()
+    if not session:
+        return False
+    db.delete(session)
+    db.commit()
+    return True

@@ -2,8 +2,9 @@ import { useState, useEffect } from "react";
 import {
   Headphones, LayoutGrid, List, Search,
   ChevronLeft, ChevronRight, X, Clock, Mic,
+  BookOpen, Download, UserCheck, Users,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, settingsApi } from "@/lib/api";
 import { cn, formatDuration } from "@/lib/utils";
 import { BookCard, type Book } from "@/components/library/BookCard";
 
@@ -13,6 +14,40 @@ interface LibraryData {
   page: number;
   page_size: number;
   empty_reason?: string;
+}
+
+interface Stats {
+  total_books: number;
+  total_downloads: number;
+  accounts_count: number;
+  downloads_per_user: { username: string; count: number }[];
+}
+
+function StatCards({ stats }: { stats: Stats }) {
+  const topUser = stats.downloads_per_user.find(u => u.count > 0);
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-2">
+      {[
+        { icon: BookOpen, label: "Books", value: stats.total_books.toLocaleString(), color: "text-brand-600" },
+        { icon: Download, label: "Downloads", value: stats.total_downloads.toLocaleString(), color: "text-emerald-600" },
+        { icon: UserCheck, label: "Accounts", value: stats.accounts_count.toLocaleString(), color: "text-amber-600" },
+        {
+          icon: Users,
+          label: "Top Downloader",
+          value: topUser ? `${topUser.username} (${topUser.count})` : "—",
+          color: "text-violet-600",
+        },
+      ].map(({ icon: Icon, label, value, color }) => (
+        <div key={label} className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 shadow-sm">
+          <div className={cn("flex items-center gap-1.5 text-xs font-medium mb-1", color)}>
+            <Icon className="h-3.5 w-3.5" />
+            {label}
+          </div>
+          <p className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate">{value}</p>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 const PAGE_SIZE = 48;
@@ -212,6 +247,11 @@ export function LibraryPage() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [page, setPage] = useState(1);
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
+  const [stats, setStats] = useState<Stats | null>(null);
+
+  useEffect(() => {
+    settingsApi.getStats().then(r => setStats(r.data)).catch(() => null);
+  }, []);
 
   // Debounce search input
   useEffect(() => {
@@ -239,6 +279,9 @@ export function LibraryPage() {
 
   return (
     <div className="space-y-4">
+      {/* Stat cards */}
+      {stats && <StatCards stats={stats} />}
+
       {/* Controls bar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
@@ -248,14 +291,14 @@ export function LibraryPage() {
             placeholder="Search by title…"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white pl-9 pr-4 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
+            className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-9 pr-4 py-2 text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
           />
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <select
             value={sort}
             onChange={e => { setSort(e.target.value); setPage(1); }}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
+            className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500"
           >
             {SORT_OPTIONS.map(o => (
               <option key={o.value} value={o.value}>{o.label}</option>

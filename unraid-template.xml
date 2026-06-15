@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>LibationWeb</Name>
+  <Repository>ghcr.io/jtechguru1/libation-web:latest</Repository>
+  <Registry>https://github.com/jtechguru1/Libation/pkgs/container/libation-web</Registry>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/jtechguru1/Libation/issues</Support>
+  <Project>https://github.com/jtechguru1/Libation/tree/web-ui-via-docker</Project>
+  <Overview>
+    A web UI wrapper for Libation — the Audible audiobook manager. Connects to your Audible account,
+    scans your library, and downloads audiobooks via LibationCli. Single Docker container with a
+    FastAPI backend and React frontend. Supports multiple users, 2FA, session management, and
+    PUID/PGID for proper Unraid permissions.
+
+    Attribution: Built on top of LibationCli by rmcrackan (https://github.com/rmcrackan/Libation).
+    This is an independent community project, not affiliated with the original Libation project.
+  </Overview>
+  <Category>Downloaders: MediaApp:Music</Category>
+  <WebUI>http://[IP]:[PORT:8000]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/jtechguru1/Libation/web-ui-via-docker/unraid-template.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/rmcrackan/Libation/master/Source/LibationAvalonia/Assets/libation-square.png</Icon>
+  <ExtraParams></ExtraParams>
+  <PostArgs></PostArgs>
+  <CPUset></CPUset>
+  <DateInstalled></DateInstalled>
+  <DonateText></DonateText>
+  <DonateLink></DonateLink>
+  <Description>
+    Web UI wrapper for Libation (Audible audiobook manager). Scan your Audible library and download
+    audiobooks. Supports multiple users, 2FA, PUID/PGID for Unraid permissions.
+  </Description>
+
+  <Networking>
+    <Mode>bridge</Mode>
+    <Publish>
+      <Port>
+        <HostPort>8000</HostPort>
+        <ContainerPort>8000</ContainerPort>
+        <Protocol>tcp</Protocol>
+      </Port>
+    </Publish>
+  </Networking>
+
+  <Data>
+    <Volume>
+      <HostDir>/mnt/user/appdata/libation/data</HostDir>
+      <ContainerDir>/data</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/libation/config</HostDir>
+      <ContainerDir>/config</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/audiobooks</HostDir>
+      <ContainerDir>/audiobooks</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+  </Data>
+
+  <Environment>
+    <Variable>
+      <Value>admin</Value>
+      <Name>ADMIN_USERNAME</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>admin</Value>
+      <Name>ADMIN_PASSWORD</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>change-me-use-a-long-random-string</Value>
+      <Name>SECRET_KEY</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>99</Value>
+      <Name>PUID</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>100</Value>
+      <Name>PGID</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>15</Value>
+      <Name>ACCESS_TOKEN_EXPIRE_MINUTES</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>60</Value>
+      <Name>REFRESH_TOKEN_EXPIRE_DAYS</Name>
+      <Mode/>
+    </Variable>
+  </Environment>
+
+  <Labels/>
+</Container>

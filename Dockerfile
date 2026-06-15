@@ -13,7 +13,7 @@ ARG LIBATION_VERSION=13.4.9
 
 WORKDIR /app
 
-# System dependencies for Libation CLI
+# System dependencies for Libation CLI + PUID/PGID support
 RUN apt-get update && apt-get install -y --no-install-recommends \
         wget \
         ca-certificates \
@@ -21,12 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         libfontconfig1 \
         libx11-6 \
+        gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # .NET invariant globalization mode — avoids libicu dependency in headless containers
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
 # Install LibationCli from .deb (self-contained, includes .NET runtime)
+# Pre-create sysctl.conf so the .deb post-install script doesn't fail inside Docker
 RUN ARCH=$(dpkg --print-architecture) && \
     wget -q -O /tmp/libation.deb \
         "https://github.com/rmcrackan/Libation/releases/download/v${LIBATION_VERSION}/Libation.${LIBATION_VERSION}-linux-chardonnay-${ARCH}.deb" && \
@@ -46,6 +48,10 @@ COPY backend/app ./app
 # Built frontend (served as static files by FastAPI)
 COPY --from=frontend-builder /frontend/dist ./static
 
+# Entrypoint script for PUID/PGID support
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 # Runtime directories
 RUN mkdir -p /data /config /audiobooks
 
@@ -53,7 +59,7 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
-    CMD wget -qO- http://localhost:8000/api/auth/me || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
+    CMD wget -qO- http://localhost:8000/api/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+ENTRYPOINT ["/docker-entrypoint.sh"]

@@ -1,7 +1,8 @@
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
+import { useTheme } from "@/context/ThemeContext";
 import {
-  BookOpen, Download, Users, Settings, LogOut, Headphones, X, Menu,
+  BookOpen, Download, Users, Settings, LogOut, Headphones, X, Menu, Moon, Sun,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
@@ -19,6 +20,7 @@ interface SidebarProps {
 
 export function Sidebar({ open, onClose }: SidebarProps) {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <>
@@ -93,6 +95,14 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             </span>
           </div>
           <button
+            onClick={toggleTheme}
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
+            aria-label="Toggle dark mode"
+          >
+            {theme === "dark" ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
+            {theme === "dark" ? "Light mode" : "Dark mode"}
+          </button>
+          <button
             onClick={logout}
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
           >
@@ -109,7 +119,7 @@ export function MobileMenuButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
+      className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 transition-colors"
       aria-label="Open menu"
     >
       <Menu className="h-5 w-5" />

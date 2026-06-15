@@ -8,8 +8,10 @@ from ..schemas.auth import (
     DisableTwoFactorRequest, TokenResponse, TwoFactorRequiredResponse,
     UserResponse, SetupTwoFactorResponse, MessageResponse, ChangePasswordRequest,
 )
+from ..schemas.users import SessionResponse
 from ..services import auth as auth_svc
 from ..config import settings
+from ..limiter import limiter
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
@@ -48,6 +50,7 @@ def get_current_user(
 
 
 @router.post("/login", response_model=TokenResponse | TwoFactorRequiredResponse)
+@limiter.limit("20/minute")
 def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     user = auth_svc.authenticate_user(db, body.username, body.password)
     if not user:
@@ -70,6 +73,7 @@ def login(body: LoginRequest, request: Request, response: Response, db: Session 
 
 
 @router.post("/verify-2fa", response_model=TokenResponse)
+@limiter.limit("10/minute")
 def verify_2fa(body: TwoFactorRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     user_id = auth_svc.decode_token(body.temp_token, "2fa_pending")
     if not user_id:
@@ -197,3 +201,25 @@ def change_password(
     db.commit()
     auth_svc.revoke_all_sessions(db, current_user.id)
     return MessageResponse(message="Password changed. Please log in again.")
+
+
+@router.get("/sessions", response_model=list[SessionResponse])
+def list_sessions(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    return auth_svc.get_sessions_for_user(db, current_user.id)
+
+
+@router.delete("/sessions/{session_id}", response_model=MessageResponse)
+def revoke_session(
+    session_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not auth_svc.revoke_session_by_id(db, session_id, current_user.id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    return MessageResponse(message="Session revoked")
+
+
+@router.delete("/sessions", response_model=MessageResponse)
+def revoke_all_sessions(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    auth_svc.revoke_all_sessions(db, current_user.id)
+    return MessageResponse(message="All sessions revoked")

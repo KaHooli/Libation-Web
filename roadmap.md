@@ -56,17 +56,16 @@
 
 ---
 
-## Phase 4 — Settings & Polish
-- [ ] Dashboard stat cards: total books, total downloads, connected accounts, **downloads per user** (sourced from `user_id` on downloads table added in Phase 3 — replaces the removed "Listening hours" card which was meaningless since Libation cannot play content)
-- [ ] App settings: download format (mp3/m4b/flac), naming convention
-- [ ] Libation settings passthrough (read/write `appsettings.json`)
-- [ ] Output directory configuration
-- [ ] Multiple user support (admin can add/remove users)
-- [ ] Session management (view and revoke active sessions)
-- [ ] Dark mode toggle
-- [ ] Mobile/foldable phone layout polish
-- [ ] Unraid Community Applications template XML
-- [ ] Unraid template with PUID/PGID support
-- [ ] API documentation page (Swagger/ReDoc link)
-- [ ] Health check endpoint improvements
-- [ ] Rate limiting on auth endpoints
+## Phase 4 — Settings & Polish ✅
+- [x] Dashboard stat cards: total books, total downloads, connected accounts, **downloads per user** (top downloader shown; sources from `user_id` on downloads table — replaces the removed "Listening hours" card)
+- [x] Libation settings passthrough (read/write `appsettings.json` — toggle-based UI for 8 key settings)
+- [x] Multiple user support — admin can create, enable/disable, and delete users; `is_admin` field with crown badge
+- [x] Session management — list active sessions with device/IP/last-used; revoke individual or all sessions
+- [x] Dark mode toggle — persisted to localStorage, applied via `dark` class on `<html>`; toggle in sidebar
+- [x] Unraid Community Applications template XML (`unraid-template.xml`)
+- [x] Unraid PUID/PGID support — `docker-entrypoint.sh` creates runtime user; `gosu` for privilege drop
+- [x] API documentation page — links to Swagger UI (`/docs`) and ReDoc (`/redoc`) in Settings (admin)
+- [x] Health check endpoint improvements — public `GET /api/health` endpoint; Dockerfile uses it
+- [x] Rate limiting on auth endpoints — `slowapi`: login 20/min, verify-2fa 10/min
+- [ ] Output directory configuration (read-only for now — controlled via Docker volume)
+- [ ] Mobile/foldable phone layout polish (deferred — needs physical device testing)

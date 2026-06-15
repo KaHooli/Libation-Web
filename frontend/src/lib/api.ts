@@ -69,4 +69,40 @@ export const authApi = {
 
   changePassword: (current_password: string, new_password: string) =>
     api.post("/auth/change-password", { current_password, new_password }),
+
+  listSessions: () =>
+    api.get("/auth/sessions"),
+
+  revokeSession: (id: number) =>
+    api.delete(`/auth/sessions/${id}`),
+
+  revokeAllSessions: () =>
+    api.delete("/auth/sessions"),
+};
+
+// Users API (admin only)
+export const usersApi = {
+  list: () =>
+    api.get("/users"),
+
+  create: (username: string, password: string, is_admin: boolean) =>
+    api.post("/users", { username, password, is_admin }),
+
+  update: (id: number, patch: { is_active?: boolean; is_admin?: boolean; new_password?: string }) =>
+    api.patch(`/users/${id}`, patch),
+
+  delete: (id: number) =>
+    api.delete(`/users/${id}`),
+};
+
+// Settings API
+export const settingsApi = {
+  getLibation: () =>
+    api.get("/settings/libation"),
+
+  updateLibation: (data: Record<string, unknown>) =>
+    api.put("/settings/libation", data),
+
+  getStats: () =>
+    api.get("/settings/stats"),
 };
