@@ -19,6 +19,10 @@ if [ "$PUID" != "0" ]; then
     useradd -u "$PUID" -g "$PGID" -s /bin/bash -M libation
   fi
 
+  # Create home directory — .NET apps (LibationCli) need a writable HOME
+  mkdir -p /home/libation
+  chown libation:libation /home/libation
+
   # Bootstrap LibationCli settings on first run (before chown so ownership is correct)
   if [ ! -f /config/Settings.json ]; then
     echo '[Libation] Creating default Settings.json for LibationCli'

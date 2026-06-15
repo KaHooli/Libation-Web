@@ -119,5 +119,16 @@
 
 ---
 
+---
+
+## Phase 5 — Post-Release Bug Fix ✅
+- [x] Root cause of "Error processing book. Skipping." (downloads completed instantly with no file written)
+  - `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` caused `CultureInfo.GetCultures()` to return only Invariant Culture (ID 0x7F); `new RegionInfo(c)` throws `ArgumentException` inside `LocaleDto.GetRegion()` → propagates through `DownloadOptions..ctor` → `BuildDownloadOptions` → `DownloadDecryptBook.ProcessAsync`
+  - Fix: removed `ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` from Dockerfile; added `libicu76` to apt-get install
+- [x] Per-book license pipeline: `_fetch_license(asin)` → `get-license <asin>` piped to `liberate -l -` for accounts with `DecryptKey: null` (no local activation bytes); 16-byte ADRM key pairs from Audible used directly
+- [x] Rebuilt and redeployed image; downloads confirmed working end-to-end
+
+---
+
 ## Phase 6 — Download Tracker UI (scoped, not built)
 - [ ] Cap usage banner: "N / cap downloads used · Resets in Xh Ym" (use `resets_at` from 429 response — no extra API calls needed)

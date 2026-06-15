@@ -14,6 +14,7 @@ ARG LIBATION_VERSION=13.4.9
 WORKDIR /app
 
 # System dependencies for Libation CLI + PUID/PGID support
+# libicu76 is required by .NET 10 for globalization (CultureInfo/RegionInfo used in DownloadOptions)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         wget \
         ca-certificates \
@@ -22,10 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libfontconfig1 \
         libx11-6 \
         gosu \
+        ffmpeg \
+        libicu76 \
     && rm -rf /var/lib/apt/lists/*
-
-# .NET invariant globalization mode — avoids libicu dependency in headless containers
-ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
 # Install LibationCli from .deb (self-contained, includes .NET runtime)
 # Pre-create sysctl.conf so the .deb post-install script doesn't fail inside Docker

@@ -12,6 +12,7 @@ services:
     volumes:
       - ./data:/data
       - ./config:/config
+      - libation-search:/config/SearchEngine
       - ./audiobooks:/audiobooks
     environment:
       - ADMIN_USERNAME=admin
@@ -22,3 +23,6 @@ services:
       - PUID=1000
       - PGID=1000
     restart: unless-stopped
+
+volumes:
+  libation-search:

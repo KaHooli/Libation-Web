@@ -54,6 +54,7 @@ function ProgressBar({ progress, status }: { progress: number; status: DownloadI
 export function DownloadsPage() {
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [scan, setScan] = useState<ScanStatus | null>(null);
+  const [scanVisible, setScanVisible] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
   const [loadingDownloads, setLoadingDownloads] = useState(true);
@@ -65,15 +66,26 @@ export function DownloadsPage() {
       .finally(() => setLoadingDownloads(false));
   }, []);
 
-  const fetchScan = useCallback(() => {
+  const fetchScan = useCallback((show = false) => {
     api.get("/downloads/scan/latest")
-      .then(r => setScan(r.data))
+      .then(r => {
+        setScan(r.data);
+        if (show) setScanVisible(true);
+      })
       .catch(() => {});
   }, []);
 
+  // Auto-dismiss completed/failed banners after 4 seconds
+  useEffect(() => {
+    if (!scanVisible || !scan || scan.status === "running") return;
+    const t = setTimeout(() => setScanVisible(false), 4000);
+    return () => clearTimeout(t);
+  }, [scan, scanVisible]);
+
   useEffect(() => {
     fetchDownloads();
-    fetchScan();
+    // Don't show the on-load fetch — only show banners triggered by user action
+    fetchScan(false);
   }, []);
 
   // Poll while there are active downloads or a running scan
@@ -86,7 +98,7 @@ export function DownloadsPage() {
 
     const interval = setInterval(() => {
       fetchDownloads();
-      fetchScan();
+      fetchScan(true);
     }, 2000);
     return () => clearInterval(interval);
   }, [downloads, scan, fetchDownloads, fetchScan]);
@@ -94,11 +106,13 @@ export function DownloadsPage() {
   const handleScan = async () => {
     setScanning(true);
     setScanError("");
+    setScanVisible(true);
     try {
       const { data } = await api.post("/downloads/scan");
       setScan(data);
     } catch (e: any) {
       setScanError(e.response?.data?.detail || "Scan failed to start");
+      fetchScan(true);
     } finally {
       setScanning(false);
     }
@@ -140,7 +154,7 @@ export function DownloadsPage() {
       </div>
 
       {/* Scan status */}
-      {scan && (
+      {scan && scanVisible && (
         <div className={cn(
           "rounded-xl border px-4 py-3 text-sm",
           scan.status === "running" ? "border-brand-200 bg-brand-50" :

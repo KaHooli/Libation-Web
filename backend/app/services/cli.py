@@ -15,6 +15,14 @@ def _cmd(*args: str) -> list[str]:
     return [settings.LIBATION_CLI, *args, "--libationFiles", settings.LIBATION_CONFIG]
 
 
+def _env() -> dict:
+    """Environment for LibationCli subprocesses — ensures HOME is a real Linux path."""
+    import os
+    env = os.environ.copy()
+    env["HOME"] = "/home/libation"
+    return env
+
+
 async def _read_fd_until(fd: int, pattern: str, timeout: float) -> str:
     """Non-blocking read from a PTY master fd until pattern matches or EOF."""
     loop = asyncio.get_event_loop()
@@ -80,6 +88,7 @@ async def list_accounts() -> list[dict]:
         *_cmd("list-accounts", "--bare"),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=_env(),
     )
     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
     accounts = []
@@ -109,6 +118,7 @@ async def start_login(email: str, locale: str) -> dict:
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
+        env=_env(),
     )
     os.close(slave_fd)
 
@@ -197,10 +207,19 @@ async def complete_login(session_id: str, response_url: str) -> str:
 async def run_scan(
     on_line: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> tuple[int, str]:
+    # Clear stale Lucene write lock left by previously killed scans
+    lock_path = f"{settings.LIBATION_CONFIG}/SearchEngine/write.lock"
+    try:
+        if os.path.exists(lock_path):
+            os.remove(lock_path)
+    except OSError:
+        pass
+
     proc = await asyncio.create_subprocess_exec(
         *_cmd("scan"),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        env=_env(),
     )
     lines: list[str] = []
     async for raw in proc.stdout:
@@ -214,27 +233,73 @@ async def run_scan(
 
 # ── Downloads ─────────────────────────────────────────────────────────────────
 
+async def _fetch_license(asin: str) -> Optional[bytes]:
+    """Fetch a per-book DRM license from Audible via get-license.
+
+    Required when AccountsSettings.json has DecryptKey=null (account was never
+    activated with local activation bytes). The JSON output is piped to
+    liberate via -l -.
+    """
+    try:
+        lproc = await asyncio.create_subprocess_exec(
+            *_cmd("get-license", asin),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_env(),
+        )
+        lic_stdout, _ = await asyncio.wait_for(lproc.communicate(), timeout=60)
+        if lproc.returncode == 0 and lic_stdout.strip():
+            return lic_stdout
+    except Exception:
+        pass
+    return None
+
+
 async def run_liberate(
     book_ids: Optional[list[str]] = None,
     on_progress: Optional[Callable[[int, str], Awaitable[None]]] = None,
+    force: bool = True,
 ) -> tuple[int, str]:
     extra: list[str] = []
+    if force:
+        extra.append("--force")
     if book_ids:
         for bid in book_ids:
             extra += ["--id", bid]
 
+    # Fetch a per-book license to handle accounts where DecryptKey is null
+    license_bytes: Optional[bytes] = None
+    if book_ids and len(book_ids) == 1:
+        license_bytes = await _fetch_license(book_ids[0])
+
+    lib_cmd = _cmd("liberate", *extra)
+    if license_bytes is not None:
+        lib_cmd = _cmd("liberate", *extra, "-l", "-")
+
     proc = await asyncio.create_subprocess_exec(
-        *_cmd("liberate", *extra),
+        *lib_cmd,
+        stdin=asyncio.subprocess.PIPE if license_bytes else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        env=_env(),
     )
+
+    if license_bytes and proc.stdin:
+        proc.stdin.write(license_bytes)
+        proc.stdin.close()
+
     lines: list[str] = []
     async for raw in proc.stdout:
         text = raw.decode().rstrip()
         lines.append(text)
         if on_progress:
-            m = re.search(r"(\d+)\s*%", text)
-            if m:
-                await on_progress(int(m.group(1)), text)
+            if re.search(r"DownloadDecryptBook Begin", text):
+                await on_progress(5, text)
+            elif re.search(r"DownloadDecryptBook Completed", text):
+                await on_progress(95, text)
+            else:
+                m = re.search(r"(\d+)\s*%", text)
+                if m:
+                    await on_progress(int(m.group(1)), text)
     await proc.wait()
     return proc.returncode, "\n".join(lines)

@@ -1,5 +1,6 @@
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from .database import engine, SessionLocal, Base
 from .models import user as user_models  # noqa: F401 — registers models
 from .models import download as download_models  # noqa: F401 — registers models
+from .models.download import Scan, Download
 from .api import auth as auth_router
 from .api import library as library_router
 from .api import accounts as accounts_router
@@ -73,6 +75,25 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         _migrate_db(db)
         _seed_admin(db)
+        now = datetime.now(timezone.utc)
+        stuck_scans = db.query(Scan).filter(Scan.status == "running").all()
+        if stuck_scans:
+            for s in stuck_scans:
+                s.status = "error"
+                s.completed_at = now
+                s.error_message = "Interrupted by server restart"
+            db.commit()
+            print(f"[Libation] Reset {len(stuck_scans)} stuck scan(s) to error")
+        stuck_downloads = db.query(Download).filter(
+            Download.status.in_(["queued", "running"])
+        ).all()
+        if stuck_downloads:
+            for d in stuck_downloads:
+                d.status = "error"
+                d.completed_at = now
+                d.error_message = "Interrupted by server restart"
+            db.commit()
+            print(f"[Libation] Reset {len(stuck_downloads)} stuck download(s) to error")
     yield
 
 

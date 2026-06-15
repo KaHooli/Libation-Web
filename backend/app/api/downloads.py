@@ -108,8 +108,12 @@ async def _run_scan(scan_id: int) -> None:
 # ── Scan endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/scan", response_model=ScanResponse, tags=["library"])
-def start_scan(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+async def start_scan(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     _require_permission("can_scan", current_user)
+    already_running = db.query(Scan).filter(Scan.status == "running").first()
+    if already_running:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="A scan is already in progress")
     scan = Scan(status="running", started_at=datetime.now(timezone.utc))
     db.add(scan)
     db.commit()
@@ -129,7 +133,7 @@ def latest_scan(db: Session = Depends(get_db), _=Depends(get_current_user)):
 # ── Download endpoints ────────────────────────────────────────────────────────
 
 @router.post("", response_model=DownloadResponse, status_code=201)
-def queue_download(
+async def queue_download(
     body: DownloadRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
@@ -187,7 +191,6 @@ def delete_download(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    _require_permission("can_remove_downloads", current_user)
     dl = db.get(Download, download_id)
     if not dl:
         raise HTTPException(status_code=404, detail="Download not found")
@@ -196,5 +199,7 @@ def delete_download(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot delete an active download",
         )
+    if dl.status == "complete":
+        _require_permission("can_remove_downloads", current_user)
     db.delete(dl)
     db.commit()
