@@ -94,7 +94,7 @@ export const usersApi = {
   create: (username: string, password: string, is_admin: boolean) =>
     api.post("/users", { username, password, is_admin }),
 
-  update: (id: number, patch: { is_active?: boolean; is_admin?: boolean; new_password?: string }) =>
+  update: (id: number, patch: { is_active?: boolean; is_admin?: boolean; new_password?: string; owner_name?: string; audible_account_id?: string | null }) =>
     api.patch(`/users/${id}`, patch),
 
   updatePermissions: (id: number, patch: {

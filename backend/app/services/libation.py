@@ -169,6 +169,7 @@ def get_library(
     sort_dir: str = "desc",
     page: int = 1,
     page_size: int = 50,
+    account_id: Optional[str] = None,
 ) -> dict:
     if not db_exists():
         return {"books": [], "total": 0, "page": page, "page_size": page_size,
@@ -183,11 +184,17 @@ def get_library(
 
         if _is_v13(sc):
             selects = _v13_selects(include_description=True)
+            where_parts: list[str] = []
             params: list = []
-            where = ""
+            if account_id:
+                where_parts.append(
+                    "EXISTS (SELECT 1 FROM LibraryBooks lb WHERE lb.BookId=b.BookId AND lb.Account=?)"
+                )
+                params.append(account_id)
             if search:
-                where = "WHERE b.Title LIKE ?"
+                where_parts.append("b.Title LIKE ?")
                 params.append(f"%{search}%")
+            where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
             sort_map = {
                 "title": "b.Title",
@@ -223,6 +230,8 @@ def get_liberate_books(
     filter_status: str = "all",
     page: int = 1,
     page_size: int = 48,
+    account_id: Optional[str] = None,
+    search: str = "",
 ) -> dict:
     if not db_exists():
         return {"books": [], "total": 0, "page": page, "page_size": page_size,
@@ -242,13 +251,22 @@ def get_liberate_books(
                 "COALESCE((SELECT u.BookStatus FROM UserDefinedItem u "
                 " WHERE u.BookId=b.BookId), 0) AS raw_status"
             )
-            total = conn.execute("SELECT COUNT(*) FROM Books b").fetchone()[0]
+            where_parts: list[str] = []
+            base_params: list = []
+            if account_id:
+                where_parts.append("EXISTS (SELECT 1 FROM LibraryBooks lb WHERE lb.BookId=b.BookId AND lb.Account=?)")
+                base_params.append(account_id)
+            if search:
+                where_parts.append("b.Title LIKE ?")
+                base_params.append(f"%{search}%")
+            where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+            total = conn.execute(f"SELECT COUNT(*) FROM Books b {where}", base_params).fetchone()[0]
             offset = (page - 1) * page_size
             sql = (
                 f"SELECT {', '.join(selects)} FROM Books b "
-                f"ORDER BY date_added DESC NULLS LAST LIMIT ? OFFSET ?"
+                f"{where} ORDER BY date_added DESC NULLS LAST LIMIT ? OFFSET ?"
             )
-            rows = conn.execute(sql, [page_size, offset]).fetchall()
+            rows = conn.execute(sql, base_params + [page_size, offset]).fetchall()
             conn.close()
 
             books = []
@@ -330,6 +348,114 @@ def get_books_by_account(
     except Exception as e:
         return {"books": [], "total": 0, "page": page, "page_size": page_size,
                 "empty_reason": str(e)}
+
+
+# ── Bulk ID query (for select-all across pages) ───────────────────────────────
+
+def get_liberate_book_ids(
+    filter_status: str = "all",
+    account_id: Optional[str] = None,
+    active_download_ids: Optional[set] = None,
+    search: str = "",
+) -> list:
+    """Return every AudibleProductId matching the filter, with no pagination."""
+    if not db_exists():
+        return []
+    try:
+        conn = _connect()
+        sc = _schema(conn)
+        if "Books" not in sc or not _is_v13(sc):
+            conn.close()
+            return []
+
+        where_parts: list[str] = []
+        params: list = []
+
+        if account_id:
+            where_parts.append(
+                "EXISTS (SELECT 1 FROM LibraryBooks lb WHERE lb.BookId=b.BookId AND lb.Account=?)"
+            )
+            params.append(account_id)
+
+        if filter_status == "liberated":
+            where_parts.append(
+                "COALESCE((SELECT u.BookStatus FROM UserDefinedItem u WHERE u.BookId=b.BookId), 0) = 1"
+            )
+        elif filter_status == "not_liberated":
+            where_parts.append(
+                "COALESCE((SELECT u.BookStatus FROM UserDefinedItem u WHERE u.BookId=b.BookId), 0) = 0"
+            )
+        elif filter_status == "audible_plus":
+            where_parts.append(
+                "EXISTS (SELECT 1 FROM LibraryBooks lb WHERE lb.BookId=b.BookId AND lb.IsAudiblePlus=1)"
+            )
+
+        if search:
+            where_parts.append("b.Title LIKE ?")
+            params.append(f"%{search}%")
+        # "all" and "downloading" handled below
+
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        rows = conn.execute(
+            f"SELECT b.AudibleProductId FROM Books b {where}", params
+        ).fetchall()
+        conn.close()
+
+        ids = [r[0] for r in rows if r[0]]
+
+        if filter_status == "downloading" and active_download_ids is not None:
+            ids = [i for i in ids if i in active_download_ids]
+
+        return ids
+    except Exception:
+        return []
+
+
+# ── Book status mutation ──────────────────────────────────────────────────────
+
+def set_book_status(book_id: str, liberated: bool) -> bool:
+    """
+    Write BookStatus into UserDefinedItem so LibationCLI sees the book as
+    already liberated (1) or resets it to not-liberated (0).
+    Creates the row with safe defaults if it doesn't exist yet.
+    """
+    if not db_exists():
+        return False
+    try:
+        conn = _connect()
+        # Resolve AudibleProductId → integer BookId
+        row = conn.execute(
+            "SELECT BookId FROM Books WHERE AudibleProductId = ?", (book_id,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return False
+        int_book_id = row[0]
+        new_status = 1 if liberated else 0
+
+        existing = conn.execute(
+            "SELECT BookId FROM UserDefinedItem WHERE BookId = ?", (int_book_id,)
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                "UPDATE UserDefinedItem SET BookStatus = ? WHERE BookId = ?",
+                (new_status, int_book_id),
+            )
+        else:
+            # Provide all NOT NULL columns; nullable ones are omitted (default NULL)
+            conn.execute(
+                "INSERT INTO UserDefinedItem "
+                "(BookId, BookStatus, IsFinished, Rating_OverallRating, "
+                " Rating_PerformanceRating, Rating_StoryRating, Tags) "
+                "VALUES (?, ?, 0, 0.0, 0.0, 0.0, '')",
+                (int_book_id, new_status),
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
 
 
 # ── Legacy v12 library (kept for backwards compatibility) ─────────────────────

@@ -8,9 +8,9 @@ import {
 import { NavLink } from "react-router-dom";
 
 const NAV = [
-  { to: "/", label: "Library", icon: BookOpen, end: true },
-  { to: "/my-books", label: "My Books", icon: BookMarked },
   { to: "/liberate", label: "Liberate", icon: Unlock },
+  { to: "/library", label: "Library", icon: BookOpen },
+  { to: "/my-books", label: "My Books", icon: BookMarked },
   { to: "/downloads", label: "Downloads", icon: Download },
   { to: "/accounts", label: "Accounts", icon: Users },
   { to: "/settings", label: "Settings", icon: Settings },
@@ -64,11 +64,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-4 px-3 scrollbar-thin">
           <ul className="space-y-0.5">
-            {NAV.map(({ to, label, icon: Icon, end }) => (
+            {NAV.map(({ to, label, icon: Icon }) => (
               <li key={to}>
                 <NavLink
                   to={to}
-                  end={end}
                   onClick={onClose}
                   className={({ isActive }) =>
                     cn(

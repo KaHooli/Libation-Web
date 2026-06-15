@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import {
-  Users, Plus, CheckCircle, XCircle, ExternalLink,
-  Copy, ChevronRight, Loader2, Globe,
+  Users, Plus, CheckCircle, ExternalLink,
+  Copy, ChevronRight, Loader2, Globe, AlertCircle, Trash2, User, Info, X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,8 @@ interface Account {
   locale: string;
   scan_library: boolean;
   authenticated: boolean;
+  owner_name: string | null;
+  owner_username: string | null;
 }
 
 type Step = "idle" | "form" | "url" | "completing" | "done";
@@ -51,6 +54,8 @@ export function AccountsPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [showNextStep, setShowNextStep] = useState(false);
 
   const fetchAccounts = () => {
     setLoading(true);
@@ -103,6 +108,19 @@ export function AccountsPage() {
     });
   };
 
+  const handleRemove = async (accountId: string) => {
+    if (!confirm("Remove this Audible account? You will need to re-authenticate to use it again.")) return;
+    setRemoving(accountId);
+    try {
+      await api.delete(`/accounts/${encodeURIComponent(accountId)}`);
+      setAccounts(prev => prev.filter(a => a.account_id !== accountId));
+    } catch (e: any) {
+      alert(e.response?.data?.detail || "Failed to remove account.");
+    } finally {
+      setRemoving(null);
+    }
+  };
+
   const resetFlow = () => {
     setStep("idle");
     setEmail("");
@@ -115,6 +133,29 @@ export function AccountsPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
+      {/* Next-step banner shown after successful account connection */}
+      {showNextStep && (
+        <div className="flex items-start gap-3 rounded-xl border border-brand-200 bg-brand-50 dark:border-brand-800 dark:bg-brand-950/40 px-4 py-3">
+          <Info className="h-4 w-4 text-brand-600 dark:text-brand-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-brand-800 dark:text-brand-300">Account connected — one more step!</p>
+            <p className="text-xs text-brand-700 dark:text-brand-400 mt-0.5">
+              Go to{" "}
+              <Link to="/downloads" className="underline font-semibold hover:text-brand-900 dark:hover:text-brand-200">
+                Downloads
+              </Link>
+              {" "}and click <span className="font-semibold">Scan Library</span> to import your audiobooks.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowNextStep(false)}
+            className="text-brand-400 hover:text-brand-600 dark:hover:text-brand-200 shrink-0"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -291,10 +332,10 @@ export function AccountsPage() {
                 <CheckCircle className="h-6 w-6 text-green-500 shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-slate-800">Account connected!</p>
-                  <p className="text-xs text-slate-500">Go to Library and run a scan to import your books.</p>
+                  <p className="text-xs text-slate-500">Next: scan your library to import your audiobooks.</p>
                 </div>
                 <button
-                  onClick={resetFlow}
+                  onClick={() => { setShowNextStep(true); resetFlow(); }}
                   className="ml-auto rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 transition-colors"
                 >
                   Done
@@ -323,20 +364,43 @@ export function AccountsPage() {
       ) : (
         <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white overflow-hidden">
           {accounts.map(acc => (
-            <div key={acc.account_id} className="flex items-center gap-4 px-5 py-4">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-100 text-brand-700 text-sm font-semibold">
-                {acc.name?.[0]?.toUpperCase() || acc.account_id[0]?.toUpperCase()}
+            <div key={acc.account_id} className="px-5 py-4">
+              <div className="flex items-center gap-4">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-100 text-brand-700 text-sm font-semibold">
+                  {acc.name?.[0]?.toUpperCase() || acc.account_id[0]?.toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-900 truncate">{acc.name || acc.account_id}</p>
+                  <p className="text-xs text-slate-500 truncate">{acc.account_id}</p>
+                </div>
+                <LocaleBadge locale={acc.locale} />
+                {acc.authenticated ? (
+                  <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
+                )}
+                <button
+                  onClick={() => handleRemove(acc.account_id)}
+                  disabled={removing === acc.account_id}
+                  title="Remove account"
+                  className="p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500 transition-colors shrink-0 disabled:opacity-50"
+                >
+                  {removing === acc.account_id
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <Trash2 className="h-4 w-4" />}
+                </button>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-slate-900 truncate">{acc.name || acc.account_id}</p>
-                <p className="text-xs text-slate-500 truncate">{acc.account_id}</p>
+              <div className="mt-2 ml-[3.25rem] flex items-center gap-1.5">
+                <User className="h-3.5 w-3.5 text-slate-300 shrink-0" />
+                <span className="text-xs text-slate-400">Owner:</span>
+                {acc.owner_name ? (
+                  <span className="text-xs font-medium text-slate-700">{acc.owner_name}</span>
+                ) : acc.owner_username ? (
+                  <span className="text-xs text-slate-500">{acc.owner_username}</span>
+                ) : (
+                  <span className="text-xs italic text-slate-300">Unassigned</span>
+                )}
               </div>
-              <LocaleBadge locale={acc.locale} />
-              {acc.authenticated ? (
-                <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
-              ) : (
-                <XCircle className="h-4 w-4 text-red-400 shrink-0" />
-              )}
             </div>
           ))}
         </div>

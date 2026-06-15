@@ -13,6 +13,7 @@ class Book(BaseModel):
     series_index: Optional[str] = None
     date_added: Optional[str] = None
     date_published: Optional[str] = None
+    is_abridged: Optional[bool] = None
 
 
 class LibraryResponse(BaseModel):

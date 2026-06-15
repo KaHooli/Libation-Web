@@ -50,6 +50,10 @@ def _migrate_db(db: Session) -> None:
         conn.execute(text("ALTER TABLE users ADD COLUMN audible_account_id TEXT"))
         db.commit()
         print("[Libation] Migrated: added audible_account_id column")
+    if "owner_name" not in users_cols:
+        conn.execute(text("ALTER TABLE users ADD COLUMN owner_name TEXT"))
+        db.commit()
+        print("[Libation] Migrated: added owner_name column")
 
 
 def _seed_admin(db: Session) -> None:

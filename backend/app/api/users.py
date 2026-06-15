@@ -91,6 +91,10 @@ def update_user(
         if len(body.new_password) < 8:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Password must be at least 8 characters")
         user.hashed_password = hash_password(body.new_password)
+    if body.owner_name is not None:
+        user.owner_name = body.owner_name.strip() or None
+    if body.audible_account_id is not None:
+        user.audible_account_id = body.audible_account_id.strip() or None
     db.commit()
     db.refresh(user)
     return user

@@ -35,6 +35,19 @@ function StatusIcon({ status }: { status: DownloadItem["status"] }) {
   return <Download className="h-4 w-4 text-slate-400" />;
 }
 
+function BookThumb({ bookId }: { bookId: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <div className="h-[5.625rem] w-[5.625rem] rounded shrink-0 bg-slate-100 flex items-center justify-center"><Headphones className="h-3.5 w-3.5 text-slate-300" /></div>;
+  return (
+    <img
+      src={`/api/library/covers/${bookId}`}
+      alt=""
+      className="h-[5.625rem] w-[5.625rem] rounded shrink-0 object-cover"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function ProgressBar({ progress, status }: { progress: number; status: DownloadItem["status"] }) {
   return (
     <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
@@ -132,7 +145,7 @@ export function DownloadsPage() {
   const failed = downloads.filter(d => d.status === "error");
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-[46rem] space-y-6">
       {/* Header + scan */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -192,9 +205,10 @@ export function DownloadsPage() {
           <h2 className="text-sm font-semibold text-slate-700 mb-2">Active ({active.length})</h2>
           <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white overflow-hidden">
             {active.map(dl => (
-              <div key={dl.id} className="px-4 py-3">
+              <div key={dl.id} className="px-4 py-[2.26875rem]">
                 <div className="flex items-center gap-3 mb-2">
                   <StatusIcon status={dl.status} />
+                  <BookThumb bookId={dl.book_id} />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-900 truncate">
                       {dl.book_title || dl.book_id}
@@ -218,8 +232,9 @@ export function DownloadsPage() {
           <h2 className="text-sm font-semibold text-slate-700 mb-2">Failed ({failed.length})</h2>
           <div className="divide-y divide-slate-100 rounded-xl border border-red-200 bg-white overflow-hidden">
             {failed.map(dl => (
-              <div key={dl.id} className="flex items-start gap-3 px-4 py-3">
+              <div key={dl.id} className="flex items-start gap-3 px-4 py-[2.26875rem]">
                 <XCircle className="h-4 w-4 text-red-400 mt-0.5 shrink-0" />
+                <BookThumb bookId={dl.book_id} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-slate-900 truncate">
                     {dl.book_title || dl.book_id}
@@ -247,8 +262,9 @@ export function DownloadsPage() {
           <h2 className="text-sm font-semibold text-slate-700 mb-2">Completed ({completed.length})</h2>
           <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white overflow-hidden">
             {completed.map(dl => (
-              <div key={dl.id} className="flex items-center gap-3 px-4 py-3">
+              <div key={dl.id} className="flex items-center gap-3 px-4 py-[2.26875rem]">
                 <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                <BookThumb bookId={dl.book_id} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-slate-900 truncate">
                     {dl.book_title || dl.book_id}

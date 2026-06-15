@@ -1,13 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   CheckCircle, XCircle, Loader2, Download, RefreshCw,
-  Headphones, Filter,
+  Headphones, Filter, CheckCheck, RotateCcw, Layers, X, Search,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { cn } from "@/lib/utils";
+import { cn, formatDuration } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+
+interface AccountOwner {
+  account_id: string;
+  name: string;
+  owner_name: string | null;
+  owner_username: string | null;
+}
 
 interface LiberateBook {
   book_id: string;
@@ -70,18 +77,23 @@ function StatusBadge({ status, progress }: { status: LiberateBook["liberate_stat
 function BookTile({
   book,
   selected,
+  multiSelectMode,
   onSelect,
   onDownload,
+  onMark,
   downloadable,
 }: {
   book: LiberateBook;
   selected: boolean;
+  multiSelectMode: boolean;
   onSelect: () => void;
   onDownload: () => void;
+  onMark: (liberated: boolean) => Promise<void>;
   downloadable: boolean;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
   const [queuing, setQueuing] = useState(false);
+  const [marking, setMarking] = useState(false);
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -91,6 +103,16 @@ function BookTile({
     setQueuing(false);
   };
 
+  const handleMark = async (e: React.MouseEvent, liberated: boolean) => {
+    e.stopPropagation();
+    if (marking) return;
+    setMarking(true);
+    await onMark(liberated);
+    setMarking(false);
+  };
+
+  const canMark = book.liberate_status !== "downloading";
+
   return (
     <button
       onClick={onSelect}
@@ -99,7 +121,7 @@ function BookTile({
         selected && "ring-2 ring-brand-500 ring-offset-2 dark:ring-offset-slate-900"
       )}
     >
-      <div className="relative aspect-[2/3] rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-700 mb-2 shadow-sm group-hover:shadow-md transition-shadow">
+      <div className="relative aspect-square rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-700 mb-2 shadow-sm group-hover:shadow-md transition-shadow">
         {!imgFailed ? (
           <img
             src={`/api/library/covers/${book.book_id}`}
@@ -115,13 +137,41 @@ function BookTile({
 
         <StatusBadge status={book.liberate_status} progress={book.download_progress} />
 
-        {book.liberate_status === "not_liberated" && downloadable && (
+        {/* Checkbox overlay — visible in multi-select mode */}
+        {multiSelectMode && (
+          <div className={cn(
+            "absolute top-1.5 left-1.5 flex h-5 w-5 items-center justify-center rounded-full border-2 transition-colors",
+            selected
+              ? "border-brand-600 bg-brand-600"
+              : "border-white/80 bg-black/30 group-hover:border-white"
+          )}>
+            {selected && <CheckCircle className="h-3.5 w-3.5 text-white" />}
+          </div>
+        )}
+
+        {/* Download button (not_liberated only, hidden in multi-select mode) */}
+        {!multiSelectMode && book.liberate_status === "not_liberated" && downloadable && (
           <button
             onClick={handleDownload}
             title="Download"
             className="absolute bottom-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-black/80 transition-all"
           >
             {queuing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+          </button>
+        )}
+
+        {/* Mark button (hidden in multi-select mode — bulk actions handle that) */}
+        {!multiSelectMode && canMark && (
+          <button
+            onClick={e => handleMark(e, book.liberate_status !== "liberated")}
+            title={book.liberate_status === "liberated" ? "Mark as not downloaded" : "Mark as downloaded"}
+            className="absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-black/80 transition-all"
+          >
+            {marking
+              ? <Loader2 className="h-3 w-3 animate-spin" />
+              : book.liberate_status === "liberated"
+                ? <RotateCcw className="h-3 w-3" />
+                : <CheckCheck className="h-3 w-3" />}
           </button>
         )}
 
@@ -132,6 +182,7 @@ function BookTile({
       <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 leading-tight line-clamp-2">{book.title}</p>
       {book.authors && <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">{book.authors}</p>}
       {book.is_abridged && <p className="text-xs text-amber-600 mt-0.5">Abridged</p>}
+      {book.length_minutes && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">{formatDuration(book.length_minutes)}</p>}
     </button>
   );
 }
@@ -142,18 +193,42 @@ export function LiberatePage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<FilterTab>("all");
+  const [ownerAccountId, setOwnerAccountId] = useState<string | null>(null);
+  const [owners, setOwners] = useState<AccountOwner[]>([]);
   const [loading, setLoading] = useState(true);
   const [cap, setCap] = useState<CapStatus | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [inputValue, setInputValue] = useState("");
+  const [search, setSearch] = useState("");
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [bulkMarking, setBulkMarking] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
   const [bulkStatus, setBulkStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [error, setError] = useState("");
-  const PAGE_SIZE = 48;
+  const [pageSize, setPageSize] = useState(48);
+  const PAGE_SIZES = [24, 48, 96, 200];
+
+  useEffect(() => {
+    api.get("/accounts").then(r => {
+      const withOwner = (r.data as AccountOwner[]).filter(a => a.owner_name || a.owner_username);
+      setOwners(withOwner);
+    }).catch(() => {});
+  }, []);
+
+  // Debounce search input by 300 ms
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(inputValue); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [inputValue]);
 
   const loadBooks = useCallback(async () => {
     setLoading(true);
     try {
+      const params: Record<string, unknown> = { filter_status: filter, page, page_size: pageSize };
+      if (ownerAccountId) params.account_id = ownerAccountId;
+      if (search) params.search = search;
       const [booksRes, capRes] = await Promise.all([
-        api.get("/liberate/books", { params: { filter_status: filter, page, page_size: PAGE_SIZE } }),
+        api.get("/liberate/books", { params }),
         api.get("/liberate/cap"),
       ]);
       setBooks(booksRes.data.books);
@@ -161,7 +236,7 @@ export function LiberatePage() {
       setCap(capRes.data);
     } catch { setError("Failed to load books."); }
     finally { setLoading(false); }
-  }, [filter, page]);
+  }, [filter, page, pageSize, ownerAccountId, search]);
 
   useEffect(() => { loadBooks(); }, [loadBooks]);
 
@@ -172,6 +247,19 @@ export function LiberatePage() {
     const t = setInterval(loadBooks, 2000);
     return () => clearInterval(t);
   }, [books, loadBooks]);
+
+  const handleMark = async (book: LiberateBook, liberated: boolean) => {
+    try {
+      await api.patch(`/liberate/books/${book.book_id}`, { liberated });
+      setBooks(bs => bs.map(b =>
+        b.book_id === book.book_id
+          ? { ...b, liberate_status: liberated ? "liberated" : "not_liberated", download_progress: null }
+          : b
+      ));
+    } catch {
+      setError("Failed to update book status.");
+    }
+  };
 
   const handleDownloadOne = async (book: LiberateBook) => {
     try {
@@ -209,6 +297,39 @@ export function LiberatePage() {
     await loadBooks();
   };
 
+  const toggleMultiSelect = () => {
+    setMultiSelectMode(m => !m);
+    setSelected(new Set());
+  };
+
+  const selectAll = async () => {
+    setSelectingAll(true);
+    try {
+      const params: Record<string, unknown> = { filter_status: filter };
+      if (ownerAccountId) params.account_id = ownerAccountId;
+      if (search) params.search = search;
+      const { data } = await api.get("/liberate/book-ids", { params });
+      setSelected(new Set(data.ids as string[]));
+    } catch { setError("Failed to fetch all book IDs."); }
+    finally { setSelectingAll(false); }
+  };
+
+  const bulkMark = async (liberated: boolean) => {
+    if (selected.size === 0 || bulkMarking) return;
+    setBulkMarking(true);
+    const ids = Array.from(selected);
+    for (const id of ids) {
+      try { await api.patch(`/liberate/books/${id}`, { liberated }); } catch { /* continue */ }
+    }
+    setBooks(bs => bs.map(b =>
+      selected.has(b.book_id)
+        ? { ...b, liberate_status: liberated ? "liberated" : "not_liberated", download_progress: null }
+        : b
+    ));
+    setSelected(new Set());
+    setBulkMarking(false);
+  };
+
   const downloadAll = async () => {
     setBulkStatus("running");
     setError("");
@@ -237,6 +358,59 @@ export function LiberatePage() {
         </Alert>
       )}
 
+      {/* Owner tabs */}
+      {owners.length > 0 && (
+        <div className="flex gap-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1 w-fit flex-wrap">
+          <button
+            onClick={() => { setOwnerAccountId(null); setPage(1); setSelected(new Set()); }}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+              ownerAccountId === null
+                ? "bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900"
+                : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+            )}
+          >
+            All
+          </button>
+          {owners.map(a => (
+            <button
+              key={a.account_id}
+              onClick={() => { setOwnerAccountId(a.account_id); setPage(1); setSelected(new Set()); }}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                ownerAccountId === a.account_id
+                  ? "bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900"
+                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+              )}
+            >
+              {a.owner_name || a.owner_username}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Search bar */}
+      <div className="flex justify-center">
+        <div className="relative w-full max-w-lg">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
+            value={inputValue}
+            onChange={e => setInputValue(e.target.value)}
+            placeholder="Search by title…"
+            className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-9 pr-9 py-2 text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 shadow-sm"
+          />
+          {inputValue && (
+            <button
+              onClick={() => setInputValue("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Controls row */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         {/* Filter tabs */}
@@ -258,12 +432,12 @@ export function LiberatePage() {
         </div>
 
         {/* Action buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={loadBooks}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
 
-          {/* Cap info */}
+          {/* Cap info (always visible) */}
           {cap && cap.cap !== null && (
             <span className={cn(
               "text-xs font-medium px-2 py-1 rounded-full",
@@ -275,50 +449,86 @@ export function LiberatePage() {
             </span>
           )}
 
-          {/* Selection controls */}
-          {selected.size > 0 && (
+          {multiSelectMode ? (
+            /* ── Multi-select mode controls ── */
             <>
-              <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>
-                Clear ({selected.size})
+              <Button size="sm" variant="outline" onClick={selectAll} loading={selectingAll}>
+                {selectingAll ? "Selecting…" : `Select All (${total.toLocaleString()})`}
               </Button>
-              <Button size="sm" onClick={confirmSelected}>
-                Queue {selected.size} book{selected.size !== 1 ? "s" : ""}
+              {selected.size > 0 && (
+                <>
+                  <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>
+                    <X className="h-3.5 w-3.5" /> Clear ({selected.size})
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => bulkMark(true)}
+                    loading={bulkMarking}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  >
+                    <CheckCheck className="h-3.5 w-3.5" /> Mark Downloaded
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => bulkMark(false)}
+                    loading={bulkMarking}
+                    className="bg-slate-600 hover:bg-slate-700 text-white"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" /> Mark Not Downloaded
+                  </Button>
+                </>
+              )}
+              <Button size="sm" variant="outline" onClick={toggleMultiSelect}>
+                <X className="h-3.5 w-3.5" /> Exit
+              </Button>
+            </>
+          ) : (
+            /* ── Normal mode controls ── */
+            <>
+              {/* Download-queueing selection controls */}
+              {selected.size > 0 && (
+                <>
+                  <Button size="sm" variant="outline" onClick={() => setSelected(new Set())}>
+                    Clear ({selected.size})
+                  </Button>
+                  <Button size="sm" onClick={confirmSelected}>
+                    Queue {selected.size} book{selected.size !== 1 ? "s" : ""}
+                  </Button>
+                </>
+              )}
+
+              {canDownload && !isCapExhausted && selected.size === 0 && (
+                hasNoCapAndAdmin ? (
+                  <Button size="sm" onClick={downloadAll} loading={bulkStatus === "running"}>
+                    <Download className="h-3.5 w-3.5" /> Download All
+                  </Button>
+                ) : cap && cap.remaining! > 0 ? (
+                  <Button size="sm" onClick={autoSelectNext}>
+                    <Filter className="h-3.5 w-3.5" /> Select Next {cap.remaining}
+                  </Button>
+                ) : null
+              )}
+
+              {isCapExhausted && cap?.resets_at && (
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Resets {new Date(cap.resets_at).toLocaleTimeString()}
+                </span>
+              )}
+
+              <Button size="sm" variant="outline" onClick={toggleMultiSelect}>
+                <Layers className="h-3.5 w-3.5" /> Multi Select
               </Button>
             </>
           )}
-
-          {/* Primary action */}
-          {canDownload && !isCapExhausted && selected.size === 0 && (
-            hasNoCapAndAdmin ? (
-              <Button size="sm" onClick={downloadAll} loading={bulkStatus === "running"}>
-                <Download className="h-3.5 w-3.5" /> Download All
-              </Button>
-            ) : cap && cap.remaining! > 0 ? (
-              <Button size="sm" onClick={autoSelectNext}>
-                <Filter className="h-3.5 w-3.5" /> Select Next {cap.remaining}
-              </Button>
-            ) : null
-          )}
-
-          {isCapExhausted && cap?.resets_at && (
-            <span className="text-xs text-slate-500 dark:text-slate-400">
-              Resets {new Date(cap.resets_at).toLocaleTimeString()}
-            </span>
-          )}
         </div>
       </div>
-
-      {/* Count */}
-      {!loading && total > 0 && (
-        <p className="text-xs text-slate-400">{total.toLocaleString()} book{total !== 1 ? "s" : ""}</p>
-      )}
 
       {/* Grid */}
       {loading ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {Array.from({ length: 12 }).map((_, i) => (
             <div key={i} className="animate-pulse">
-              <div className="aspect-[2/3] rounded-xl bg-slate-200 dark:bg-slate-700 mb-2" />
+              <div className="aspect-square rounded-xl bg-slate-200 dark:bg-slate-700 mb-2" />
               <div className="h-3 rounded bg-slate-200 dark:bg-slate-700 w-3/4 mb-1" />
             </div>
           ))}
@@ -341,15 +551,17 @@ export function LiberatePage() {
               key={book.book_id}
               book={book}
               selected={selected.has(book.book_id)}
+              multiSelectMode={multiSelectMode}
               onSelect={() => {
-                if (book.liberate_status !== "not_liberated") return;
-                setSelected(s => {
-                  const n = new Set(s);
-                  n.has(book.book_id) ? n.delete(book.book_id) : n.add(book.book_id);
-                  return n;
-                });
+                if (multiSelectMode) {
+                  setSelected(s => { const n = new Set(s); n.has(book.book_id) ? n.delete(book.book_id) : n.add(book.book_id); return n; });
+                } else {
+                  if (book.liberate_status !== "not_liberated") return;
+                  setSelected(s => { const n = new Set(s); n.has(book.book_id) ? n.delete(book.book_id) : n.add(book.book_id); return n; });
+                }
               }}
               onDownload={() => handleDownloadOne(book)}
+              onMark={(liberated) => handleMark(book, liberated)}
               downloadable={canDownload && !isCapExhausted && book.liberate_status === "not_liberated"}
             />
           ))}
@@ -357,20 +569,36 @@ export function LiberatePage() {
       )}
 
       {/* Pagination */}
-      {!loading && total > PAGE_SIZE && (
-        <div className="flex items-center justify-between pt-1">
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
-          </p>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
-              Prev
-            </Button>
-            <span className="text-sm text-slate-600 dark:text-slate-400 tabular-nums">{page} / {Math.ceil(total / PAGE_SIZE)}</span>
-            <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={page >= Math.ceil(total / PAGE_SIZE)}>
-              Next
-            </Button>
+      {!loading && total > 0 && (
+        <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
+          <div className="flex items-center gap-3">
+            {total > pageSize && (
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total.toLocaleString()}
+              </p>
+            )}
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-400 dark:text-slate-500">Per page:</span>
+              <select
+                value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+                className="rounded border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-1.5 py-0.5 text-xs text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              >
+                {PAGE_SIZES.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
           </div>
+          {total > pageSize && (
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+                Prev
+              </Button>
+              <span className="text-sm text-slate-600 dark:text-slate-400 tabular-nums">{page} / {Math.ceil(total / pageSize)}</span>
+              <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={page >= Math.ceil(total / pageSize)}>
+                Next
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

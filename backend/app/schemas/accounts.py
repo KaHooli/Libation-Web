@@ -7,6 +7,8 @@ class AccountResponse(BaseModel):
     locale: str
     scan_library: bool
     authenticated: bool
+    owner_name: str | None = None
+    owner_username: str | None = None
 
 
 class StartLoginRequest(BaseModel):

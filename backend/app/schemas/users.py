@@ -13,6 +13,8 @@ class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
     is_admin: Optional[bool] = None
     new_password: Optional[str] = None
+    owner_name: Optional[str] = None
+    audible_account_id: Optional[str] = None
 
 
 class PermissionsUpdate(BaseModel):
@@ -33,6 +35,7 @@ class UserAdminResponse(BaseModel):
     permissions: Optional[dict] = None
     download_cap: Optional[int] = None
     audible_account_id: Optional[str] = None
+    owner_name: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

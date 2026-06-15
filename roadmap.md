@@ -130,5 +130,29 @@
 
 ---
 
+## Phase 5 — Extended UX (continued) ✅
+
+### User Management enhancements ✅
+- [x] Inline **Owner Name** field per user row in Settings > User Management (saves on blur/Enter)
+- [x] **Audible Account** dropdown per user row — links `users.audible_account_id` to a connected account so the Accounts page owner display is correct
+
+### Liberate Page ✅
+- [x] **Owner filter tabs** — one tab per owner (using `owner_name` + `audible_account_id`), filters books by `LibraryBooks.Account`; search and account_id combined in a WHERE clause on the backend
+- [x] **Centered search bar** with 300ms debounce; passes `search` param to `GET /api/liberate/books`
+- [x] **Mark as Downloaded / Not Downloaded** directly from the UI — `PATCH /api/liberate/books/{book_id}` writes to `UserDefinedItem.BookStatus` in LibationData.db; INSERT if row doesn't exist (populates all NOT NULL cols)
+- [x] **Multi Select mode** — checkbox overlay on each tile; Select All fetches all matching IDs via `GET /api/liberate/book-ids` (no pagination, spans all pages); bulk "Mark Downloaded" and "Mark Not Downloaded" actions
+- [x] **Per-page selector** — PAGE_SIZES [24, 48, 96, 200]; placed in pagination row
+
+### Library Page ✅
+- [x] **Owner filter tabs** — same style as Liberate; passes `account_id` to `GET /api/library/books`
+
+### Accounts Page ✅
+- [x] **Post-login banner** — after successful Audible login, shows brand-blue info banner: "Account connected — one more step! Go to Downloads and click Scan Library"; dismissable with ✕
+
+### Navigation ✅
+- [x] **Liberate moved to top** of sidebar nav and made the **default view** (`/` → redirect `/liberate`); Library moved to `/library`
+
+---
+
 ## Phase 6 — Download Tracker UI (scoped, not built)
 - [ ] Cap usage banner: "N / cap downloads used · Resets in Xh Ym" (use `resets_at` from 429 response — no extra API calls needed)

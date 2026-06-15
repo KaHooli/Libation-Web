@@ -4,7 +4,7 @@ import {
   Sliders, Trash2, Plus, RefreshCw, Crown, BookOpen, ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { authApi, usersApi, settingsApi } from "@/lib/api";
+import { api, authApi, usersApi, settingsApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -516,6 +516,69 @@ interface UserItem {
   created_at: string;
   permissions?: UserPermissions | null;
   download_cap?: number | null;
+  owner_name?: string | null;
+  audible_account_id?: string | null;
+}
+
+function OwnerInfoCell({
+  userId, initialName, initialAccountId, accounts, onSaved,
+}: {
+  userId: number;
+  initialName: string | null | undefined;
+  initialAccountId: string | null | undefined;
+  accounts: { account_id: string; name: string }[];
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(initialName ?? "");
+  const [saving, setSaving] = useState(false);
+
+  const saveName = async () => {
+    const trimmed = name.trim();
+    if (trimmed === (initialName ?? "")) return;
+    setSaving(true);
+    try { await usersApi.update(userId, { owner_name: trimmed }); }
+    finally { setSaving(false); }
+  };
+
+  const saveAccount = async (newId: string) => {
+    setSaving(true);
+    try {
+      await usersApi.update(userId, { audible_account_id: newId || null });
+      onSaved();
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="flex items-center gap-3 mt-1 flex-wrap">
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs text-slate-400 dark:text-slate-500 shrink-0">Owner Name:</span>
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          onBlur={saveName}
+          onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          placeholder="First name"
+          className="w-24 rounded border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-1.5 py-0.5 text-xs text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-slate-300 dark:placeholder:text-slate-500"
+        />
+      </div>
+      {accounts.length > 0 && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-slate-400 dark:text-slate-500 shrink-0">Audible Account:</span>
+          <select
+            value={initialAccountId ?? ""}
+            onChange={e => saveAccount(e.target.value)}
+            className="rounded border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-1.5 py-0.5 text-xs text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          >
+            <option value="">— None —</option>
+            {accounts.map(a => (
+              <option key={a.account_id} value={a.account_id}>{a.name || a.account_id}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {saving && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
+    </div>
+  );
 }
 
 function PermissionRow({ user, onSaved }: { user: UserItem; onSaved: () => void }) {
@@ -641,6 +704,7 @@ function UserPermissionsSection() {
 function UserManagementSection() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<UserItem[]>([]);
+  const [accounts, setAccounts] = useState<{ account_id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -653,8 +717,9 @@ function UserManagementSection() {
   const load = async () => {
     setLoading(true);
     try {
-      const { data } = await usersApi.list();
-      setUsers(data);
+      const [usersRes, accountsRes] = await Promise.all([usersApi.list(), api.get("/accounts")]);
+      setUsers(usersRes.data);
+      setAccounts(accountsRes.data);
     } catch { setError("Failed to load users."); }
     finally { setLoading(false); }
   };
@@ -758,6 +823,7 @@ function UserManagementSection() {
                   <p className="text-xs text-slate-500 dark:text-slate-400">
                     Joined {new Date(u.created_at).toLocaleDateString()} · {u.totp_enabled ? "2FA on" : "No 2FA"}
                   </p>
+                  <OwnerInfoCell userId={u.id} initialName={u.owner_name} initialAccountId={u.audible_account_id} accounts={accounts} onSaved={load} />
                 </div>
                 {u.id !== me?.id && (
                   <div className="flex gap-1.5 shrink-0">

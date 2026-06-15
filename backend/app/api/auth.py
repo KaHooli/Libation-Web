@@ -142,7 +142,9 @@ def update_me(
 ):
     if "audible_account_id" in body:
         current_user.audible_account_id = body["audible_account_id"] or None
-        db.commit()
+    if "owner_name" in body:
+        current_user.owner_name = (body["owner_name"] or "").strip() or None
+    db.commit()
     return UserResponse.model_validate(current_user)
 
 

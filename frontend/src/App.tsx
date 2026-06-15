@@ -36,15 +36,16 @@ function AppRoutes() {
       <Route path="/auth/2fa" element={<PublicRoute><TwoFactorPage /></PublicRoute>} />
 
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-        <Route path="/" element={<LibraryPage />} />
-        <Route path="/my-books" element={<MyBooksPage />} />
+        <Route path="/" element={<Navigate to="/liberate" replace />} />
         <Route path="/liberate" element={<LiberatePage />} />
+        <Route path="/library" element={<LibraryPage />} />
+        <Route path="/my-books" element={<MyBooksPage />} />
         <Route path="/downloads" element={<DownloadsPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/liberate" replace />} />
     </Routes>
   );
 }

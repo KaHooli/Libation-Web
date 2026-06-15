@@ -14,6 +14,7 @@ export interface Book {
   series_index: string | null;
   date_added: string | null;
   date_published: string | null;
+  is_abridged?: boolean | null;
 }
 
 interface Props {
@@ -42,7 +43,7 @@ export function BookCard({ book, onClick }: Props) {
       onClick={onClick}
       className="group relative text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 rounded-xl"
     >
-      <div className="relative aspect-[2/3] rounded-xl overflow-hidden bg-slate-100 mb-2 shadow-sm group-hover:shadow-md transition-shadow">
+      <div className="relative aspect-square rounded-xl overflow-hidden bg-slate-100 mb-2 shadow-sm group-hover:shadow-md transition-shadow">
         {!imgFailed ? (
           <img
             src={`/api/library/covers/${book.book_id}`}
@@ -71,18 +72,10 @@ export function BookCard({ book, onClick }: Props) {
           )}
         </button>
       </div>
-      <p className="text-xs font-semibold text-slate-800 leading-tight line-clamp-2">{book.title}</p>
-      {book.authors && (
-        <p className="text-xs text-slate-500 truncate mt-0.5">{book.authors}</p>
-      )}
-      {book.series_name && (
-        <p className="text-xs text-brand-600 truncate mt-0.5">
-          {book.series_name}{book.series_index ? ` #${book.series_index}` : ""}
-        </p>
-      )}
-      {book.length_minutes && (
-        <p className="text-xs text-slate-400 mt-0.5">{formatDuration(book.length_minutes)}</p>
-      )}
+      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 leading-tight line-clamp-2">{book.title}</p>
+      {book.authors && <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">{book.authors}</p>}
+      {book.is_abridged && <p className="text-xs text-amber-600 mt-0.5">Abridged</p>}
+      {book.length_minutes && <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">{formatDuration(book.length_minutes)}</p>}
     </button>
   );
 }

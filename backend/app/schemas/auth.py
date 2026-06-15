@@ -37,6 +37,7 @@ class UserResponse(BaseModel):
     totp_enabled: bool
     is_admin: bool = False
     audible_account_id: str | None = None
+    owner_name: str | None = None
     download_cap: int | None = None
     permissions: dict | None = None
 

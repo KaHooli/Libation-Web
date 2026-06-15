@@ -8,6 +8,13 @@ import { api, settingsApi } from "@/lib/api";
 import { cn, formatDuration } from "@/lib/utils";
 import { BookCard, type Book } from "@/components/library/BookCard";
 
+interface AccountOwner {
+  account_id: string;
+  name: string;
+  owner_name: string | null;
+  owner_username: string | null;
+}
+
 interface LibraryData {
   books: Book[];
   total: number;
@@ -67,7 +74,7 @@ function LoadingSkeleton({ mode }: { mode: "grid" | "list" }) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
         {Array.from({ length: 12 }).map((_, i) => (
           <div key={i} className="animate-pulse">
-            <div className="aspect-[2/3] rounded-xl bg-slate-200 mb-2" />
+            <div className="aspect-square rounded-xl bg-slate-200 mb-2" />
             <div className="h-3 rounded bg-slate-200 w-3/4 mb-1" />
             <div className="h-3 rounded bg-slate-200 w-1/2" />
           </div>
@@ -248,9 +255,14 @@ export function LibraryPage() {
   const [page, setPage] = useState(1);
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [owners, setOwners] = useState<AccountOwner[]>([]);
+  const [ownerAccountId, setOwnerAccountId] = useState<string | null>(null);
 
   useEffect(() => {
     settingsApi.getStats().then(r => setStats(r.data)).catch(() => null);
+    api.get("/accounts").then(r => {
+      setOwners((r.data as AccountOwner[]).filter(a => a.owner_name || a.owner_username));
+    }).catch(() => {});
   }, []);
 
   // Debounce search input
@@ -266,14 +278,14 @@ export function LibraryPage() {
   useEffect(() => {
     const [sort_by, sort_dir] = sort.split(":");
     setLoading(true);
+    const params: Record<string, unknown> = { search: debouncedSearch, sort_by, sort_dir, page, page_size: PAGE_SIZE };
+    if (ownerAccountId) params.account_id = ownerAccountId;
     api
-      .get("/library/books", {
-        params: { search: debouncedSearch, sort_by, sort_dir, page, page_size: PAGE_SIZE },
-      })
+      .get("/library/books", { params })
       .then(r => setData(r.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false));
-  }, [debouncedSearch, sort, page]);
+  }, [debouncedSearch, sort, page, ownerAccountId]);
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
 
@@ -281,6 +293,37 @@ export function LibraryPage() {
     <div className="space-y-4">
       {/* Stat cards */}
       {stats && <StatCards stats={stats} />}
+
+      {/* Owner tabs */}
+      {owners.length > 0 && (
+        <div className="flex gap-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1 w-fit flex-wrap">
+          <button
+            onClick={() => { setOwnerAccountId(null); setPage(1); }}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+              ownerAccountId === null
+                ? "bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900"
+                : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+            )}
+          >
+            All
+          </button>
+          {owners.map(a => (
+            <button
+              key={a.account_id}
+              onClick={() => { setOwnerAccountId(a.account_id); setPage(1); }}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                ownerAccountId === a.account_id
+                  ? "bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900"
+                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+              )}
+            >
+              {a.owner_name || a.owner_username}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Controls bar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">

@@ -2,7 +2,9 @@ import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -54,11 +56,50 @@ def get_cap_status(current_user=Depends(get_current_user), db: Session = Depends
     return _cap_status(current_user, db)
 
 
+class BookStatusUpdate(BaseModel):
+    liberated: bool
+
+
+@router.patch("/books/{book_id}")
+def update_book_status(
+    book_id: str,
+    body: BookStatusUpdate,
+    current_user=Depends(get_current_user),
+):
+    _require_permission("can_liberate", current_user)
+    ok = lib_svc.set_book_status(book_id, body.liberated)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
+    return {"book_id": book_id, "liberated": body.liberated}
+
+
+@router.get("/book-ids")
+def list_liberate_book_ids(
+    filter_status: str = "all",
+    account_id: Optional[str] = None,
+    search: str = "",
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    _require_permission("can_liberate", current_user)
+    active_rows = db.query(Download).filter(Download.status.in_(["queued", "running"])).all()
+    active_ids = {r.book_id for r in active_rows}
+    ids = lib_svc.get_liberate_book_ids(
+        filter_status=filter_status,
+        account_id=account_id or None,
+        active_download_ids=active_ids,
+        search=search,
+    )
+    return {"ids": ids, "total": len(ids)}
+
+
 @router.get("/books", response_model=LiberateResponse)
 def list_liberate_books(
     filter_status: str = "all",
     page: int = 1,
     page_size: int = 48,
+    account_id: Optional[str] = None,
+    search: str = "",
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -77,6 +118,8 @@ def list_liberate_books(
         filter_status=filter_status,
         page=page,
         page_size=page_size,
+        account_id=account_id or None,
+        search=search,
     )
     return result
 

@@ -214,7 +214,7 @@ export function MyBooksPage() {
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
           {Array.from({ length: 12 }).map((_, i) => (
             <div key={i} className="animate-pulse">
-              <div className="aspect-[2/3] rounded-xl bg-slate-200 dark:bg-slate-700 mb-2" />
+              <div className="aspect-square rounded-xl bg-slate-200 dark:bg-slate-700 mb-2" />
               <div className="h-3 rounded bg-slate-200 dark:bg-slate-700 w-3/4 mb-1" />
             </div>
           ))}
