@@ -22,9 +22,22 @@ if [ "$PUID" != "0" ]; then
   # Fix ownership of runtime directories
   chown -R libation:libation /data /config /audiobooks /app 2>/dev/null || true
 
+  # Bootstrap LibationCli settings on first run
+  if [ ! -f /config/Settings.json ]; then
+    echo '[Libation] Creating default Settings.json for LibationCli'
+    echo '{"Books": "/audiobooks"}' > /config/Settings.json
+    chown libation:libation /config/Settings.json
+  fi
+
   echo "[Libation] Running as UID=$PUID GID=$PGID"
   exec gosu libation uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 else
+  # Bootstrap LibationCli settings on first run
+  if [ ! -f /config/Settings.json ]; then
+    echo '[Libation] Creating default Settings.json for LibationCli'
+    echo '{"Books": "/audiobooks"}' > /config/Settings.json
+  fi
+
   echo "[Libation] Running as root"
   exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 fi
