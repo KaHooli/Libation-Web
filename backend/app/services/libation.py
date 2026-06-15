@@ -145,6 +145,9 @@ def _v13_selects(include_description=True, date_added_account: Optional[str] = N
         selects.append(
             "(SELECT MAX(lb.DateAdded) FROM LibraryBooks lb WHERE lb.BookId=b.BookId) AS date_added"
         )
+    selects.append(
+        "(SELECT lb.IsAudiblePlus FROM LibraryBooks lb WHERE lb.BookId=b.BookId LIMIT 1) AS is_audible_plus"
+    )
     return selects
 
 
@@ -154,6 +157,7 @@ def _v13_row_to_book(r: sqlite3.Row) -> dict:
     ct = d.get("content_type")
     d["content_type"] = ct_map.get(ct, "Product") if ct is not None else "Product"
     d["is_abridged"] = bool(d.get("is_abridged"))
+    d["is_audible_plus"] = bool(d.get("is_audible_plus"))
     return d
 
 
@@ -261,7 +265,9 @@ def get_liberate_books(
                     d["download_progress"] = None
                 books.append(d)
 
-            if filter_status != "all":
+            if filter_status == "audible_plus":
+                books = [b for b in books if b.get("is_audible_plus")]
+            elif filter_status != "all":
                 books = [b for b in books if b["liberate_status"] == filter_status]
 
             return {"books": books, "total": total, "page": page, "page_size": page_size}

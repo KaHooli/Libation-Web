@@ -15,6 +15,7 @@ class LiberateBook(BaseModel):
     content_type: Optional[str] = None
     language: Optional[str] = None
     is_abridged: Optional[bool] = None
+    is_audible_plus: Optional[bool] = None
     community_rating: Optional[float] = None
     # "not_liberated" | "liberated" | "error" | "downloading"
     liberate_status: str = "not_liberated"

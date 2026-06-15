@@ -20,6 +20,7 @@ interface LiberateBook {
   download_progress: number | null;
   content_type: string | null;
   is_abridged: boolean | null;
+  is_audible_plus: boolean | null;
 }
 
 interface CapStatus {
@@ -29,10 +30,11 @@ interface CapStatus {
   resets_at: string | null;
 }
 
-type FilterTab = "all" | "liberated" | "not_liberated" | "downloading";
+type FilterTab = "all" | "audible_plus" | "liberated" | "not_liberated" | "downloading";
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All" },
+  { key: "audible_plus", label: "Audible Plus" },
   { key: "liberated", label: "Downloaded" },
   { key: "not_liberated", label: "Not Downloaded" },
   { key: "downloading", label: "In Progress" },
@@ -327,7 +329,9 @@ export function LiberatePage() {
             <Headphones className="h-10 w-10 text-slate-300" />
           </div>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            {filter === "all" ? "No books in library yet. Connect an account and scan." : `No books with status "${filter}".`}
+            {filter === "all" ? "No books in library yet. Connect an account and scan."
+              : filter === "audible_plus" ? "No Audible Plus titles found in your library."
+              : `No books with status "${filter}".`}
           </p>
         </div>
       ) : (
