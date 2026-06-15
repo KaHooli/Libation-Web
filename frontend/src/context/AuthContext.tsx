@@ -6,6 +6,9 @@ interface User {
   username: string;
   totp_enabled: boolean;
   is_admin: boolean;
+  audible_account_id: string | null;
+  download_cap: number | null;
+  permissions: Record<string, boolean> | null;
 }
 
 interface AuthContextValue {

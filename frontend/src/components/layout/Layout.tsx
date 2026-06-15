@@ -4,6 +4,8 @@ import { Sidebar, MobileMenuButton } from "./Sidebar";
 
 const PAGE_TITLES: Record<string, string> = {
   "/": "Library",
+  "/my-books": "My Books",
+  "/liberate": "Liberate",
   "/downloads": "Downloads",
   "/accounts": "Accounts",
   "/settings": "Settings",

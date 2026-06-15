@@ -36,6 +36,9 @@ class UserResponse(BaseModel):
     username: str
     totp_enabled: bool
     is_admin: bool = False
+    audible_account_id: str | None = None
+    download_cap: int | None = None
+    permissions: dict | None = None
 
     model_config = {"from_attributes": True}
 

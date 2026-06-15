@@ -1,7 +1,15 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from ..database import Base
+
+DEFAULT_PERMISSIONS = {
+    "can_download": True,
+    "can_scan": True,
+    "can_manage_accounts": True,
+    "can_liberate": True,
+    "can_remove_downloads": False,
+}
 
 
 class User(Base):
@@ -14,6 +22,9 @@ class User(Base):
     totp_enabled = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
+    permissions = Column(JSON, nullable=True)
+    download_cap = Column(Integer, nullable=True)
+    audible_account_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")

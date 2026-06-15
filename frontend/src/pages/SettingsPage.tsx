@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   ShieldCheck, ShieldOff, KeyRound, Loader2, Users, MonitorSmartphone,
-  Sliders, Trash2, Plus, RefreshCw, Crown, BookOpen,
+  Sliders, Trash2, Plus, RefreshCw, Crown, BookOpen, ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { authApi, usersApi, settingsApi } from "@/lib/api";
@@ -427,6 +427,30 @@ function LibationSettingsSection() {
 
 // ── User Management Section (admin only) ────────────────────────────────────
 
+interface UserPermissions {
+  can_download: boolean;
+  can_scan: boolean;
+  can_manage_accounts: boolean;
+  can_liberate: boolean;
+  can_remove_downloads: boolean;
+}
+
+const DEFAULT_PERMISSIONS: UserPermissions = {
+  can_download: true,
+  can_scan: true,
+  can_manage_accounts: true,
+  can_liberate: true,
+  can_remove_downloads: false,
+};
+
+const PERM_LABELS: { key: keyof UserPermissions; label: string }[] = [
+  { key: "can_download", label: "Download" },
+  { key: "can_scan", label: "Scan" },
+  { key: "can_manage_accounts", label: "Manage accounts" },
+  { key: "can_liberate", label: "Liberate" },
+  { key: "can_remove_downloads", label: "Remove downloads" },
+];
+
 interface UserItem {
   id: number;
   username: string;
@@ -434,6 +458,128 @@ interface UserItem {
   is_admin: boolean;
   totp_enabled: boolean;
   created_at: string;
+  permissions?: UserPermissions | null;
+  download_cap?: number | null;
+}
+
+function PermissionRow({ user, onSaved }: { user: UserItem; onSaved: () => void }) {
+  const perms: UserPermissions = { ...DEFAULT_PERMISSIONS, ...(user.permissions ?? {}) };
+  const [cap, setCap] = useState(String(user.download_cap ?? ""));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const togglePerm = async (key: keyof UserPermissions) => {
+    setSaving(true); setError("");
+    try {
+      await usersApi.updatePermissions(user.id, { [key]: !perms[key] });
+      onSaved();
+    } catch { setError("Failed to save."); }
+    finally { setSaving(false); }
+  };
+
+  const saveCap = async () => {
+    setSaving(true); setError("");
+    try {
+      const val = cap.trim() === "" ? null : parseInt(cap, 10);
+      await usersApi.updatePermissions(user.id, { download_cap: isNaN(val as number) ? null : val });
+      onSaved();
+    } catch { setError("Failed to save."); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-3 bg-slate-50/50 dark:bg-slate-800/50">
+      <div className="flex items-center gap-2">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 dark:bg-brand-900/40 text-brand-700 dark:text-brand-400 text-xs font-semibold">
+          {user.username[0].toUpperCase()}
+        </div>
+        <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">{user.username}</span>
+        {saving && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
+        {error && <span className="text-xs text-red-500">{error}</span>}
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        {PERM_LABELS.map(({ key, label }) => (
+          <label key={key} className="flex items-center gap-1.5 cursor-pointer select-none">
+            <button
+              onClick={() => togglePerm(key)}
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+                perms[key] ? "bg-brand-600" : "bg-slate-200 dark:bg-slate-600"
+              }`}
+              role="switch"
+              aria-checked={perms[key]}
+            >
+              <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-150 ease-in-out ${perms[key] ? "translate-x-4" : "translate-x-0"}`} />
+            </button>
+            <span className="text-xs text-slate-600 dark:text-slate-300">{label}</span>
+          </label>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <label className="text-xs text-slate-500 dark:text-slate-400 shrink-0">Download cap (per 12h):</label>
+        <input
+          type="number"
+          min={0}
+          placeholder="unlimited"
+          value={cap}
+          onChange={e => setCap(e.target.value)}
+          onBlur={saveCap}
+          onKeyDown={e => { if (e.key === "Enter") saveCap(); }}
+          className="w-24 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-2 py-1 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        />
+        <span className="text-xs text-slate-400">blank = unlimited</span>
+      </div>
+    </div>
+  );
+}
+
+function UserPermissionsSection() {
+  const [users, setUsers] = useState<UserItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const { data } = await usersApi.list();
+      setUsers(data.filter((u: UserItem) => !u.is_admin));
+    } catch { setError("Failed to load users."); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-brand-600" />
+              User permissions
+            </CardTitle>
+            <CardDescription>
+              Per-user feature access and download caps. Admins always have full access.
+            </CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={load}>
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {error && <Alert variant="error">{error}</Alert>}
+        {loading ? (
+          <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>
+        ) : users.length === 0 ? (
+          <p className="text-sm text-slate-500 dark:text-slate-400 py-4 text-center">No non-admin users yet.</p>
+        ) : (
+          users.map(u => <PermissionRow key={u.id} user={u} onSaved={load} />)
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 function UserManagementSection() {
@@ -626,6 +772,7 @@ export function SettingsPage() {
     <div className="max-w-2xl space-y-6">
       {user?.is_admin && <LibationSettingsSection />}
       {user?.is_admin && <UserManagementSection />}
+      {user?.is_admin && <UserPermissionsSection />}
       <SessionsSection />
       <TwoFactorSection />
       <ChangePasswordSection />

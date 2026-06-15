@@ -3,11 +3,14 @@ import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
   BookOpen, Download, Users, Settings, LogOut, Headphones, X, Menu, Moon, Sun,
+  BookMarked, Unlock,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const NAV = [
   { to: "/", label: "Library", icon: BookOpen, end: true },
+  { to: "/my-books", label: "My Books", icon: BookMarked },
+  { to: "/liberate", label: "Liberate", icon: Unlock },
   { to: "/downloads", label: "Downloads", icon: Download },
   { to: "/accounts", label: "Accounts", icon: Users },
   { to: "/settings", label: "Settings", icon: Settings },

@@ -1,17 +1,52 @@
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user
 from ..database import SessionLocal, get_db
 from ..models.download import Download, Scan
+from ..models.user import DEFAULT_PERMISSIONS
 from ..schemas.downloads import DownloadRequest, DownloadResponse, ScanResponse
 from ..services import cli
 
 router = APIRouter(prefix="/api/downloads", tags=["downloads"])
+
+
+def _require_permission(flag: str, user) -> None:
+    if user.is_admin:
+        return
+    perms = user.permissions or DEFAULT_PERMISSIONS
+    if not perms.get(flag, DEFAULT_PERMISSIONS.get(flag, True)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail=f"Permission denied: {flag}")
+
+
+def _enforce_cap(user, db: Session) -> None:
+    """Raise 429 if user is at their 12-hour download cap."""
+    if user.is_admin or user.download_cap is None:
+        return
+    window_start = datetime.now(timezone.utc) - timedelta(hours=12)
+    used = db.query(func.count(Download.id)).filter(
+        Download.user_id == user.id,
+        Download.created_at > window_start,
+    ).scalar() or 0
+    if used >= user.download_cap:
+        oldest = db.query(func.min(Download.created_at)).filter(
+            Download.user_id == user.id,
+            Download.created_at > window_start,
+        ).scalar()
+        resets_at = None
+        if oldest:
+            oldest_utc = oldest.replace(tzinfo=timezone.utc) if oldest.tzinfo is None else oldest
+            resets_at = (oldest_utc + timedelta(hours=12)).isoformat()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"message": "Download cap reached", "resets_at": resets_at},
+        )
 
 
 # ── Background tasks ──────────────────────────────────────────────────────────
@@ -73,7 +108,8 @@ async def _run_scan(scan_id: int) -> None:
 # ── Scan endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/scan", response_model=ScanResponse, tags=["library"])
-def start_scan(db: Session = Depends(get_db), _=Depends(get_current_user)):
+def start_scan(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    _require_permission("can_scan", current_user)
     scan = Scan(status="running", started_at=datetime.now(timezone.utc))
     db.add(scan)
     db.commit()
@@ -98,7 +134,9 @@ def queue_download(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    # Prevent duplicate active downloads for the same book
+    _require_permission("can_download", current_user)
+    _enforce_cap(current_user, db)
+
     existing = (
         db.query(Download)
         .filter(
@@ -122,7 +160,6 @@ def queue_download(
     db.add(dl)
     db.commit()
     db.refresh(dl)
-
     asyncio.create_task(_run_download(dl.id, body.book_id))
     return dl
 
@@ -148,8 +185,9 @@ def get_download(
 def delete_download(
     download_id: int,
     db: Session = Depends(get_db),
-    _=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
+    _require_permission("can_remove_downloads", current_user)
     dl = db.get(Download, download_id)
     if not dl:
         raise HTTPException(status_code=404, detail="Download not found")

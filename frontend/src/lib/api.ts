@@ -70,6 +70,9 @@ export const authApi = {
   changePassword: (current_password: string, new_password: string) =>
     api.post("/auth/change-password", { current_password, new_password }),
 
+  updateMe: (patch: { audible_account_id?: string }) =>
+    api.patch("/auth/me", patch),
+
   listSessions: () =>
     api.get("/auth/sessions"),
 
@@ -90,6 +93,16 @@ export const usersApi = {
 
   update: (id: number, patch: { is_active?: boolean; is_admin?: boolean; new_password?: string }) =>
     api.patch(`/users/${id}`, patch),
+
+  updatePermissions: (id: number, patch: {
+    can_download?: boolean;
+    can_scan?: boolean;
+    can_manage_accounts?: boolean;
+    can_liberate?: boolean;
+    can_remove_downloads?: boolean;
+    download_cap?: number | null;
+  }) =>
+    api.patch(`/users/${id}/permissions`, patch),
 
   delete: (id: number) =>
     api.delete(`/users/${id}`),

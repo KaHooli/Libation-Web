@@ -69,3 +69,55 @@
 - [x] Rate limiting on auth endpoints — `slowapi`: login 20/min, verify-2fa 10/min
 - [ ] Output directory configuration (read-only for now — controlled via Docker volume)
 - [ ] Mobile/foldable phone layout polish (deferred — needs physical device testing)
+
+---
+
+## Phase 5 — Liberate View, My Books & Per-User Permissions ✅
+
+### Sidebar additions ✅
+- [x] New entries: **My Books** (`/my-books`) and **Liberate** (`/liberate`)
+
+### Liberate View (`/liberate`) ✅
+- [x] All books from LibationData.db in the same grid layout as Library
+- [x] Status badge overlay on bottom-left of each cover:
+  - Green ✓ = `UserDefinedItem.BookStatus = 1` (liberated/downloaded)
+  - Red ✕ = `BookStatus = 0` (not downloaded) or `2` (error)
+  - Animated blue spinner = actively present in `downloads` table with `status = queued/running`
+- [x] Filter tabs: All / Downloaded / Not Downloaded / In Progress
+- [x] Download All (no-cap users) / Download Next N + auto-select + confirm queue (capped users)
+- [x] Individual one-click download button on hover (subject to cap)
+- [x] 2-second polling while any book is actively downloading
+- [x] Backend: `GET /api/liberate/books` — JOIN `Books` + `UserDefinedItem` + active downloads overlay
+
+### My Books (`/my-books`) ✅
+- [x] Same grid/list UI as Library filtered to `LibraryBooks WHERE Account = ?`
+- [x] User self-selects their Audible account from the connected accounts list (stored as `audible_account_id` on users row, set via `PATCH /api/auth/me`)
+- [x] If no account linked, shows account-picker prompt
+- [x] "Change account" button to unlink and re-pick
+
+### Enhanced Metadata ✅
+- [x] `UserDefinedItem.BookStatus` JOIN for liberate status per book
+- [x] New fields: Subtitle, ContentType (mapped to string), Language, IsAbridged
+- [x] "Abridged" badge on Liberate book tiles
+- [x] Community ratings via `Rating` table JOIN (schema-discovery resilient)
+
+### Per-User Permissions ✅
+- [x] `permissions` JSON + `download_cap` INTEGER + `audible_account_id` TEXT added to `users` via startup migration
+- [x] Flags: `can_download`, `can_scan`, `can_manage_accounts`, `can_liberate`, `can_remove_downloads`
+- [x] Default for new non-admin users: all `true` except `can_remove_downloads = false`
+- [x] Admins bypass all permission checks
+- [x] Admin permission matrix in Settings — toggle per-flag per-user + download cap number input
+- [x] `PATCH /api/users/{id}/permissions` enforces permissions on downloads, scan, delete, liberate
+
+### Download Cap (12-hour rolling window) ✅
+- [x] Rolling window: `COUNT(downloads WHERE user_id = ? AND created_at > NOW() − 12h)`
+- [x] No cap → "Download All" button fires `POST /api/liberate/download-all`
+- [x] Cap set, remaining > 0 → "Download Next N" auto-selects books; confirm queues each via `POST /api/downloads`
+- [x] Cap exhausted → all download buttons disabled; reset time shown
+- [x] Individual book downloads also decrement window; cap enforced server-side with 429 + `resets_at`
+- [x] `download_cap = null` and `is_admin = true` both bypass entirely
+
+---
+
+## Phase 6 — Download Tracker UI (scoped, not built)
+- [ ] Cap usage banner: "N / cap downloads used · Resets in Xh Ym" (use `resets_at` from 429 response — no extra API calls needed)

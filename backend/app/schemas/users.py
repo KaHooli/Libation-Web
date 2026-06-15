@@ -15,12 +15,24 @@ class UpdateUserRequest(BaseModel):
     new_password: Optional[str] = None
 
 
+class PermissionsUpdate(BaseModel):
+    can_download: Optional[bool] = None
+    can_scan: Optional[bool] = None
+    can_manage_accounts: Optional[bool] = None
+    can_liberate: Optional[bool] = None
+    can_remove_downloads: Optional[bool] = None
+    download_cap: Optional[int] = None
+
+
 class UserAdminResponse(BaseModel):
     id: int
     username: str
     is_active: bool
     is_admin: bool
     totp_enabled: bool
+    permissions: Optional[dict] = None
+    download_cap: Optional[int] = None
+    audible_account_id: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

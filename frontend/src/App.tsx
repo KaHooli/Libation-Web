@@ -8,6 +8,8 @@ import { LibraryPage } from "@/pages/LibraryPage";
 import { AccountsPage } from "@/pages/AccountsPage";
 import { DownloadsPage } from "@/pages/DownloadsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { MyBooksPage } from "@/pages/MyBooksPage";
+import { LiberatePage } from "@/pages/LiberatePage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -35,6 +37,8 @@ function AppRoutes() {
 
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route path="/" element={<LibraryPage />} />
+        <Route path="/my-books" element={<MyBooksPage />} />
+        <Route path="/liberate" element={<LiberatePage />} />
         <Route path="/downloads" element={<DownloadsPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

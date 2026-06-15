@@ -133,6 +133,18 @@ def me(current_user=Depends(get_current_user)):
     return UserResponse.model_validate(current_user)
 
 
+@router.patch("/me", response_model=UserResponse)
+def update_me(
+    body: dict,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if "audible_account_id" in body:
+        current_user.audible_account_id = body["audible_account_id"] or None
+        db.commit()
+    return UserResponse.model_validate(current_user)
+
+
 @router.post("/setup-2fa", response_model=SetupTwoFactorResponse)
 def setup_2fa(current_user=Depends(get_current_user)):
     if current_user.totp_enabled:

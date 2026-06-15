@@ -32,8 +32,24 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 - **Auto-refresh**: Timer in `AuthContext` refreshes access token 2 min before expiry
 
 ## Database (SQLite at `/data/app.db`)
-- `users`: id, username, hashed_password (bcrypt), totp_secret, totp_enabled, is_active, created_at
-- `sessions`: id, user_id, refresh_token_hash (sha256), expires_at, created_at, last_used_at
+- `users`: id, username, hashed_password (bcrypt), totp_secret, totp_enabled, is_active, is_admin, permissions (JSON), download_cap (INTEGER), audible_account_id (TEXT), created_at
+- `sessions`: id, user_id, refresh_token_hash (sha256), expires_at, created_at, last_used_at, ip_address, user_agent
+- `downloads`: id, book_id, book_title, user_id, status, progress, started_at, completed_at, error_message, created_at
+- `scans`: id, status, started_at, completed_at, books_added, output, error_message
+
+## Permissions system
+- `DEFAULT_PERMISSIONS` in `models/user.py`: all flags `true` except `can_remove_downloads = false`
+- Flags: `can_download`, `can_scan`, `can_manage_accounts`, `can_liberate`, `can_remove_downloads`
+- Admins bypass all checks; non-admin users inherit `DEFAULT_PERMISSIONS` if their `permissions` column is NULL
+- `PATCH /api/users/{id}/permissions` — admin-only, updates flags + `download_cap`
+- `download_cap = null` means unlimited; positive integer = max downloads per 12-hour rolling window
+- 12h window enforcement: `COUNT(downloads WHERE user_id=? AND created_at > NOW()-12h)`; 429 response includes `resets_at` ISO timestamp
+
+## Liberate service
+- `GET /api/liberate/books` — all books with status from `UserDefinedItem.BookStatus` (0=not_liberated, 1=liberated, 2=error) overlaid with active `downloads` table rows
+- `GET /api/liberate/cap` — current cap accounting for logged-in user
+- `POST /api/liberate/download-all` — fires `libationcli liberate` (no-args); only available when user has no cap
+- Individual downloads still go through `POST /api/downloads` with per-call cap enforcement
 
 ## Default credentials
 Set via env vars `ADMIN_USERNAME` / `ADMIN_PASSWORD` (defaults: `admin` / `admin`).
@@ -108,6 +124,7 @@ docker compose up --build
 - **Phase 2** (complete): Library view — reads Libation SQLite DB, grid/list book view with cover art, search, sort, pagination, book detail slide-over, empty states.
 - **Phase 3** (complete): Accounts & Downloads — add Audible accounts via `login-external` OAuth flow, library scan, per-book downloads via `liberate`, downloads page with progress polling, download button on book cards.
 - **Phase 4** (complete): Settings & Polish — dashboard stat cards, Libation settings passthrough, multiple user management (admin CRUD), session management (list/revoke), dark mode toggle, PUID/PGID support, Unraid CA template, rate limiting on auth endpoints, improved health check.
+- **Phase 5** (complete): Liberate view, My Books, per-user permissions, and download caps. New `/liberate` page shows all books with status overlays (green ✓ downloaded, red ✕ not downloaded, animated spinner for in-progress) and filter tabs. New `/my-books` page filters books by the user's linked Audible account. Per-user permission flags (`can_download`, `can_scan`, `can_manage_accounts`, `can_liberate`, `can_remove_downloads`) stored as JSON on users row; admin toggle matrix in Settings. 12-hour rolling window download cap: uncapped users get "Download All" (fires `libationcli liberate`), capped users get "Download Next N" auto-selecting books; cap enforced on both individual and bulk downloads (429 with `resets_at`). Enhanced book metadata via `UserDefinedItem` JOIN (BookStatus, Subtitle, ContentType, Language, IsAbridged, community ratings).
 
 ## Conventions
 - API routes: `/api/<resource>/<action>`
