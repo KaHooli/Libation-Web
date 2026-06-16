@@ -21,6 +21,7 @@ from .api import users as users_router
 from .api import settings as settings_router
 from .api import liberate as liberate_router
 from .api import updates as updates_router
+from .api import logs as logs_router
 from .services.auth import hash_password, get_user_by_username
 from .services.logger import get_logger
 from .models.user import User
@@ -128,6 +129,7 @@ app.include_router(users_router.router)
 app.include_router(settings_router.router)
 app.include_router(liberate_router.router)
 app.include_router(updates_router.router)
+app.include_router(logs_router.router)
 
 
 @app.get("/api/health", include_in_schema=False)

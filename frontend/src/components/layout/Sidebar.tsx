@@ -3,7 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
   Download, Users, Settings, LogOut, Headphones, X, Menu, Moon, Sun,
-  Unlock,
+  Unlock, ScrollText,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
@@ -12,6 +12,10 @@ const NAV = [
   { to: "/downloads", label: "Downloads", icon: Download },
   { to: "/accounts", label: "Accounts", icon: Users },
   { to: "/settings", label: "Settings", icon: Settings },
+];
+
+const ADMIN_NAV = [
+  { to: "/logs", label: "Logs", icon: ScrollText },
 ];
 
 interface SidebarProps {
@@ -82,6 +86,34 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               </li>
             ))}
           </ul>
+          {user?.is_admin && (
+            <>
+              <p className="mt-4 mb-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">
+                Admin
+              </p>
+              <ul className="space-y-0.5">
+                {ADMIN_NAV.map(({ to, label, icon: Icon }) => (
+                  <li key={to}>
+                    <NavLink
+                      to={to}
+                      onClick={onClose}
+                      className={({ isActive }) =>
+                        cn(
+                          "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                          isActive
+                            ? "bg-brand-600 text-white"
+                            : "text-slate-400 hover:bg-slate-800 hover:text-white"
+                        )
+                      }
+                    >
+                      <Icon className="h-4 w-4 shrink-0" />
+                      {label}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </nav>
 
         {/* User footer */}

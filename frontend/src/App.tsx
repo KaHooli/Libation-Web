@@ -8,6 +8,15 @@ import { AccountsPage } from "@/pages/AccountsPage";
 import { DownloadsPage } from "@/pages/DownloadsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { LiberatePage } from "@/pages/LiberatePage";
+import { LogsPage } from "@/pages/LogsPage";
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isLoading, user } = useAuth();
+  if (isLoading) return null;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (!user?.is_admin) return <Navigate to="/liberate" replace />;
+  return <>{children}</>;
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -39,6 +48,7 @@ function AppRoutes() {
         <Route path="/downloads" element={<DownloadsPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/logs" element={<AdminRoute><LogsPage /></AdminRoute>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/liberate" replace />} />
