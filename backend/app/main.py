@@ -1,5 +1,6 @@
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
@@ -144,4 +145,7 @@ if os.path.isdir(STATIC_DIR):
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
+        candidate = Path(STATIC_DIR) / full_path
+        if candidate.is_file():
+            return FileResponse(str(candidate))
         return FileResponse(f"{STATIC_DIR}/index.html")
