@@ -22,6 +22,7 @@ from .api import settings as settings_router
 from .api import liberate as liberate_router
 from .api import updates as updates_router
 from .services.auth import hash_password, get_user_by_username
+from .services.logger import get_logger
 from .models.user import User
 from .config import settings
 from .limiter import limiter
@@ -77,6 +78,8 @@ def _seed_admin(db: Session) -> None:
 async def lifespan(app: FastAPI):
     os.makedirs("/data", exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    logger = get_logger()
+    logger.info("[startup] Libation Web UI starting up")
     with SessionLocal() as db:
         _migrate_db(db)
         _seed_admin(db)
@@ -99,6 +102,8 @@ async def lifespan(app: FastAPI):
                 d.error_message = "Interrupted by server restart"
             db.commit()
             print(f"[Libation] Reset {len(stuck_downloads)} stuck download(s) to error")
+            logger.warning("[startup] Reset %d stuck download(s) to error (server was restarted)", len(stuck_downloads))
+    logger.info("[startup] Ready")
     yield
 
 

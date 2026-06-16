@@ -3,10 +3,12 @@ import fcntl
 import os
 import pty
 import re
+import time
 import uuid
 from typing import Callable, Awaitable, Optional
 
 from ..config import settings
+from .logger import get_logger, log_cli
 
 _PENDING_LOGINS: dict[str, dict] = {}  # session_id → {email, locale, master_fd, proc}
 
@@ -84,13 +86,15 @@ async def _drain_fd(fd: int, timeout: float) -> str:
 # ── Accounts ─────────────────────────────────────────────────────────────────
 
 async def list_accounts() -> list[dict]:
+    t0 = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
         *_cmd("list-accounts", "--bare"),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=_env(),
     )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    log_cli("list-accounts --bare", proc.returncode, (stdout + stderr).decode(), time.monotonic() - t0)
     accounts = []
     for line in stdout.decode().strip().splitlines():
         parts = line.split("\t")
@@ -112,6 +116,9 @@ async def start_login(email: str, locale: str) -> dict:
     We allocate a pty pair, attach the slave end to the process, and read
     the URL from the master end without blocking the event loop.
     """
+    logger = get_logger()
+    logger.info("[login] Starting login-external for %s (%s)", email, locale)
+    t0 = time.monotonic()
     master_fd, slave_fd = pty.openpty()
     proc = await asyncio.create_subprocess_exec(
         *_cmd("login-external", "-a", email, "-l", locale),
@@ -134,6 +141,7 @@ async def start_login(email: str, locale: str) -> dict:
             os.close(master_fd)
         except OSError:
             pass
+        logger.error("[login] Timed out waiting for login URL for %s (%.1fs)", email, time.monotonic() - t0)
         raise RuntimeError("Timed out waiting for LibationCli login URL")
 
     match = re.search(r"https://www\.amazon\.[^\s]+", output)
@@ -143,18 +151,21 @@ async def start_login(email: str, locale: str) -> dict:
             os.close(master_fd)
         except OSError:
             pass
+        logger.error("[login] login-external exited (%s) without a login URL for %s", proc.returncode, email)
         raise RuntimeError(
             f"LibationCli exited ({proc.returncode}) without producing a login URL.\n"
             + output
         )
 
     login_url = match.group(0).rstrip(".")
+    logger.info("[login] Login URL generated for %s (%.1fs) — waiting for user response", email, time.monotonic() - t0)
     session_id = str(uuid.uuid4())
     _PENDING_LOGINS[session_id] = {
         "email": email,
         "locale": locale,
         "master_fd": master_fd,
         "proc": proc,
+        "t0": t0,
     }
 
     async def _expire() -> None:
@@ -176,12 +187,15 @@ async def start_login(email: str, locale: str) -> dict:
 
 async def complete_login(session_id: str, response_url: str) -> str:
     """Write the response URL to LibationCli's PTY stdin to complete login."""
+    logger = get_logger()
     session = _PENDING_LOGINS.pop(session_id, None)
     if session is None:
         raise KeyError("Login session not found or expired")
 
     master_fd: int = session["master_fd"]
     proc = session["proc"]
+    email: str = session.get("email", "unknown")
+    t0: float = session.get("t0", time.monotonic())
 
     try:
         os.write(master_fd, f"{response_url}\n".encode())
@@ -197,8 +211,10 @@ async def complete_login(session_id: str, response_url: str) -> str:
         pass
 
     if proc.returncode != 0:
+        logger.error("[login] complete_login FAILED for %s → exit %s (%.1fs)\n%s", email, proc.returncode, time.monotonic() - t0, output)
         raise RuntimeError(f"Login failed (exit {proc.returncode}).\n{output}")
 
+    logger.info("[login] complete_login OK for %s (%.1fs)", email, time.monotonic() - t0)
     return output
 
 
@@ -207,6 +223,10 @@ async def complete_login(session_id: str, response_url: str) -> str:
 async def run_scan(
     on_line: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> tuple[int, str]:
+    logger = get_logger()
+    logger.info("[scan] Starting library scan")
+    t0 = time.monotonic()
+
     # Clear stale Lucene write lock left by previously killed scans
     lock_path = f"{settings.LIBATION_CONFIG}/SearchEngine/write.lock"
     try:
@@ -228,7 +248,9 @@ async def run_scan(
         if on_line:
             await on_line(text)
     await proc.wait()
-    return proc.returncode, "\n".join(lines)
+    output = "\n".join(lines)
+    log_cli("scan", proc.returncode, output, time.monotonic() - t0)
+    return proc.returncode, output
 
 
 # ── Downloads ─────────────────────────────────────────────────────────────────
@@ -240,6 +262,8 @@ async def _fetch_license(asin: str) -> Optional[bytes]:
     activated with local activation bytes). The JSON output is piped to
     liberate via -l -.
     """
+    logger = get_logger()
+    t0 = time.monotonic()
     try:
         lproc = await asyncio.create_subprocess_exec(
             *_cmd("get-license", asin),
@@ -247,11 +271,12 @@ async def _fetch_license(asin: str) -> Optional[bytes]:
             stderr=asyncio.subprocess.PIPE,
             env=_env(),
         )
-        lic_stdout, _ = await asyncio.wait_for(lproc.communicate(), timeout=60)
+        lic_stdout, lic_stderr = await asyncio.wait_for(lproc.communicate(), timeout=60)
+        log_cli(f"get-license {asin}", lproc.returncode, lic_stderr.decode(), time.monotonic() - t0)
         if lproc.returncode == 0 and lic_stdout.strip():
             return lic_stdout
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("[get-license] %s failed: %s", asin, exc)
     return None
 
 
@@ -260,6 +285,11 @@ async def run_liberate(
     on_progress: Optional[Callable[[int, str], Awaitable[None]]] = None,
     force: bool = True,
 ) -> tuple[int, str]:
+    logger = get_logger()
+    ids_label = " ".join(book_ids) if book_ids else "(all)"
+    logger.info("[liberate] Starting liberate for %s", ids_label)
+    t0 = time.monotonic()
+
     extra: list[str] = []
     if force:
         extra.append("--force")
@@ -302,4 +332,6 @@ async def run_liberate(
                 if m:
                     await on_progress(int(m.group(1)), text)
     await proc.wait()
-    return proc.returncode, "\n".join(lines)
+    output = "\n".join(lines)
+    log_cli(f"liberate {ids_label}", proc.returncode, output, time.monotonic() - t0)
+    return proc.returncode, output

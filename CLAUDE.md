@@ -125,6 +125,20 @@ docker compose up --build
 - `GET /api/settings/stats` — total_books (LibationData.db), total_downloads (our DB), accounts_count (LibationCli), downloads_per_user (JOIN)
 - Field map: Python snake_case ↔ Libation PascalCase key names
 
+## Logging (`backend/app/services/logger.py`)
+- Writes to `/config/logs/libation-web.log` (on the mapped `/config` volume — survives container restarts)
+- `RotatingFileHandler`: 5 MB per file, 3 backups (`libation-web.log`, `.1`, `.2`, `.3`)
+- Log format: `YYYY-MM-DD HH:MM:SS [LEVEL] message`
+- Logged events:
+  - **Startup**: server starting, stuck downloads/scans reset, ready
+  - **list-accounts**: command + exit code + duration
+  - **Login**: start (email, locale), URL generated, completion success/failure
+  - **Scan**: start, full CLI output, exit code, duration
+  - **get-license**: per-book ASIN, exit code, stderr, duration
+  - **Liberate**: book IDs (or "all"), full CLI output (truncated at 20 KB), exit code, duration
+- OAuth URLs and response URLs are intentionally NOT logged (contain auth tokens)
+- On Unraid: readable at `/mnt/user/appdata/libation/config/logs/libation-web.log`
+
 ## Rate limiting
 - `slowapi` on `/api/auth/login` (20/min) and `/api/auth/verify-2fa` (10/min)
 - Limiter instance in `backend/app/limiter.py` (separate to avoid circular imports)
