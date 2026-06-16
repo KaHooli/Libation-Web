@@ -11,8 +11,10 @@
   <Overview>
     A web UI wrapper for Libation — the Audible audiobook manager. Connects to your Audible account,
     scans your library, and downloads audiobooks via LibationCli. Single Docker container with a
-    FastAPI backend and React frontend. Supports multiple users, 2FA, session management, and
-    PUID/PGID for proper Unraid permissions.
+    FastAPI backend and React frontend. Supports multiple users, 2FA, session management, per-user
+    download caps, and PUID/PGID for proper Unraid permissions. Includes a built-in CLI self-update
+    feature — admins can update LibationCli to the latest version directly from the Settings page
+    without rebuilding the Docker image.
 
     Attribution: Built on top of LibationCli by rmcrackan (https://github.com/rmcrackan/Libation).
     This is an independent community project, not affiliated with the original Libation project.
@@ -29,7 +31,8 @@
   <DonateLink></DonateLink>
   <Description>
     Web UI wrapper for Libation (Audible audiobook manager). Scan your Audible library and download
-    audiobooks. Supports multiple users, 2FA, PUID/PGID for Unraid permissions.
+    audiobooks. Supports multiple users, 2FA, per-user download caps, CLI self-update, and
+    PUID/PGID for Unraid permissions.
   </Description>
 
   <Networking>
