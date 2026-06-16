@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
-import { RefreshCw, Download, Circle } from "lucide-react";
+import { RefreshCw, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const LEVELS = ["ALL", "INFO", "WARN", "ERROR", "DEBUG"] as const;
@@ -31,7 +31,7 @@ export function LogsPage() {
     setLoading(true);
     setError(null);
     try {
-      const { data } = await api.get("/api/logs", {
+      const { data } = await api.get("/logs", {
         params: { lines: lineCount, level: level.toLowerCase() },
       });
       setLines(data.lines);
@@ -47,12 +47,10 @@ export function LogsPage() {
     }
   }, [lineCount, level]);
 
-  // Initial load + when filters change
   useEffect(() => {
     fetchLogs(true);
   }, [fetchLogs]);
 
-  // Auto-refresh
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     if (autoRefresh) {
@@ -63,12 +61,8 @@ export function LogsPage() {
     };
   }, [autoRefresh, fetchLogs]);
 
-  const handleDownload = () => {
-    window.open("/api/logs/download", "_blank");
-  };
-
   return (
-    <div className="h-full flex flex-col gap-4 p-6">
+    <div className="flex flex-col gap-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -81,13 +75,14 @@ export function LogsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleDownload}
+          <a
+            href="/api/logs/download"
+            download="libation-web.log"
             className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
           >
             <Download className="h-4 w-4" />
             Download
-          </button>
+          </a>
           <button
             onClick={() => fetchLogs(false)}
             disabled={loading}
@@ -101,7 +96,6 @@ export function LogsPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        {/* Level tabs */}
         <div className="flex items-center gap-1 rounded-lg border border-slate-200 dark:border-slate-700 p-1">
           {LEVELS.map((l) => (
             <button
@@ -119,7 +113,6 @@ export function LogsPage() {
           ))}
         </div>
 
-        {/* Line count */}
         <select
           value={lineCount}
           onChange={(e) => setLineCount(Number(e.target.value))}
@@ -130,7 +123,6 @@ export function LogsPage() {
           ))}
         </select>
 
-        {/* Auto-refresh toggle */}
         <button
           onClick={() => setAutoRefresh((v) => !v)}
           className={cn(
@@ -140,34 +132,37 @@ export function LogsPage() {
               : "border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
           )}
         >
-          <Circle className={cn("h-2 w-2 fill-current", autoRefresh ? "text-brand-500 animate-pulse" : "text-slate-400")} />
+          <span className={cn(
+            "inline-block h-2 w-2 rounded-full",
+            autoRefresh ? "bg-brand-500 animate-pulse" : "bg-slate-400"
+          )} />
           Auto-refresh
         </button>
       </div>
 
       {/* Log output */}
-      <div className="flex-1 min-h-0 rounded-xl bg-slate-950 border border-slate-800 overflow-hidden flex flex-col">
-        {error ? (
-          <div className="flex items-center justify-center h-full text-red-400 text-sm">{error}</div>
-        ) : lines.length === 0 && !loading ? (
-          <div className="flex items-center justify-center h-full text-slate-500 text-sm">
-            No log entries found.
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-            {truncated && (
-              <div className="text-slate-600 mb-2 select-none">
-                — {total - lines.length} earlier lines not shown —
-              </div>
-            )}
-            {lines.map((line, i) => (
-              <div key={i} className={cn("whitespace-pre-wrap break-all", levelColor(line))}>
-                {line}
-              </div>
-            ))}
-            <div ref={bottomRef} />
-          </div>
-        )}
+      <div className="rounded-xl bg-slate-950 border border-slate-800 overflow-hidden">
+        <div className="h-[calc(100vh-280px)] min-h-64 overflow-y-auto p-4 font-mono text-xs leading-relaxed">
+          {error ? (
+            <span className="text-red-400">{error}</span>
+          ) : lines.length === 0 && !loading ? (
+            <span className="text-slate-500">No log entries found.</span>
+          ) : (
+            <>
+              {truncated && (
+                <div className="text-slate-600 mb-2 select-none">
+                  — {total - lines.length} earlier lines not shown —
+                </div>
+              )}
+              {lines.map((line, i) => (
+                <div key={i} className={cn("whitespace-pre-wrap break-all", levelColor(line))}>
+                  {line}
+                </div>
+              ))}
+              <div ref={bottomRef} />
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
