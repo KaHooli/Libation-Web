@@ -151,5 +151,31 @@
 
 ---
 
-## Phase 6 — Download Tracker UI (scoped, not built)
-- [ ] Cap usage banner: "N / cap downloads used · Resets in Xh Ym" (use `resets_at` from 429 response — no extra API calls needed)
+## Phase 6 — CLI Self-Update ✅
+
+### Entrypoint restart loop ✅
+- [x] `docker-entrypoint.sh` replaced `exec gosu uvicorn` with a `while true` restart loop
+- [x] On each loop iteration: installs `/config/updates/pending` `.deb` as root via `dpkg -i` before starting uvicorn
+- [x] Previous `.deb` saved to `/config/updates/rollback` before each update (enables one-step rollback)
+- [x] Restart path: Python writes `/tmp/libation-restart` sentinel → SIGTERMs uvicorn → loop installs update → restarts
+- [x] Crash path (no sentinel): 5-second delay before restart to avoid tight loop
+- [x] `SIGTERM` to container exits cleanly (no zombie processes)
+
+### Update service ✅
+- [x] `GET /api/updates/status` — installed version (from `libationcli --version`), latest GitHub release, up-to-date flag, rollback availability
+- [x] `POST /api/updates/check` — force-refresh GitHub API cache
+- [x] `POST /api/updates/install` — admin only; downloads `linux-chardonnay-{arch}.deb` from GitHub to `/config/updates/`, stages pending file, triggers restart
+- [x] `POST /api/updates/rollback` — admin only; re-stages previous `.deb` and triggers restart
+- [x] GitHub Releases API (`rmcrackan/Libation`) cached in-process for 1 hour
+- [x] Architecture auto-detected (`amd64` / `arm64`) via `platform.machine()`
+- [x] `httpx` used for async GitHub API calls and streamed `.deb` download
+
+### Settings — About section ✅
+- [x] Visible to all users: installed CLI version, latest available version, release date, up-to-date status badge
+- [x] Admin-only controls: **Check for updates**, **Update to vX.X.X**, **Roll back**, **Release notes** link
+- [x] While restarting: branded reconnecting banner; frontend polls `/api/health` and auto-refreshes when server returns
+
+---
+
+## Phase 7 — Future (not built)
+- [ ] Cap usage banner: "N / cap downloads used · Resets in Xh Ym" (use `resets_at` from 429 response)

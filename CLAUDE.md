@@ -53,6 +53,23 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 - `POST /api/liberate/download-all` — fires `libationcli liberate` (no-args); only available when user has no cap
 - Individual downloads still go through `POST /api/downloads` with per-call cap enforcement
 
+## Update service (`backend/app/services/update.py` + `backend/app/api/updates.py`)
+- `GET /api/updates/status` — returns installed CLI version (parsed from `libationcli --version` stderr), latest GitHub release version, up-to-date flag, release date, and whether a rollback `.deb` is available
+- `POST /api/updates/check` — same as status but force-bypasses the 1-hour in-memory GitHub API cache
+- `POST /api/updates/install` — admin only; downloads the `linux-chardonnay-{arch}.deb` asset from GitHub to `/config/updates/`, writes `/config/updates/pending`, then SIGTERMs uvicorn via background task (response is sent first)
+- `POST /api/updates/rollback` — admin only; re-stages the previous `.deb` and triggers restart
+- Latest release cached in-process for 3600s to avoid GitHub API rate limits
+- Architecture detected via `platform.machine()`: `aarch64`/`arm64` → `arm64`, else `amd64`
+- `httpx` (async) used for GitHub API and `.deb` download (streamed in 64KB chunks)
+
+## Entrypoint restart loop (`docker-entrypoint.sh`)
+- Replaced `exec gosu ... uvicorn` with a `while true` loop so the container survives uvicorn restarts
+- On each iteration: checks `/config/updates/pending`; if present, runs `dpkg -i` as root, writes `/config/updates/current`, removes pending flag
+- Previous `.deb` filename saved to `/config/updates/rollback` before each update for one-step rollback
+- Restart path: Python writes `/tmp/libation-restart` sentinel → SIGTERMs uvicorn → loop detects sentinel → installs update → restarts uvicorn
+- Crash path (no sentinel): loop restarts uvicorn after 5s delay
+- `SIGTERM` to container (e.g. `docker stop`) sets `SHOULD_EXIT=true`, kills uvicorn, exits loop cleanly
+
 ## Default credentials
 Set via env vars `ADMIN_USERNAME` / `ADMIN_PASSWORD` (defaults: `admin` / `admin`).
 Admin user is seeded on first startup if no users exist.
@@ -135,6 +152,7 @@ docker compose up --build
 - **Phase 4** (complete): Settings & Polish — dashboard stat cards, Libation settings passthrough, multiple user management (admin CRUD), session management (list/revoke), dark mode toggle, PUID/PGID support, Unraid CA template, rate limiting on auth endpoints, improved health check.
 - **Phase 5** (complete): Liberate view, My Books, per-user permissions, and download caps. New `/liberate` page shows all books with status overlays (green ✓ downloaded, red ✕ not downloaded, animated spinner for in-progress) and filter tabs. New `/my-books` page filters books by the user's linked Audible account. Per-user permission flags (`can_download`, `can_scan`, `can_manage_accounts`, `can_liberate`, `can_remove_downloads`) stored as JSON on users row; admin toggle matrix in Settings. 12-hour rolling window download cap: uncapped users get "Download All" (fires `libationcli liberate`), capped users get "Download Next N" auto-selecting books; cap enforced on both individual and bulk downloads (429 with `resets_at`). Enhanced book metadata via `UserDefinedItem` JOIN (BookStatus, Subtitle, ContentType, Language, IsAbridged, community ratings).
 - **Phase 5 bug fix** (complete): Root cause of "Error processing book. Skipping." identified and fixed. `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` broke `CultureInfo.GetCultures()`, causing `RegionInfo` crash in `LocaleDto.GetRegion()` during every download attempt. Fix: removed the env var, added `libicu76` to Dockerfile apt-get install. Also added `_fetch_license()` + `get-license | liberate -l -` pipeline in `cli.py` to handle accounts where `DecryptKey: null` (no local activation bytes).
+- **Phase 6** (complete): CLI self-update. `docker-entrypoint.sh` replaced with a restart loop that installs `/config/updates/pending` `.deb` as root on each iteration. New `update` service + API: `GET /status`, `POST /check`, `POST /install` (admin), `POST /rollback` (admin). GitHub Releases API queried for `linux-chardonnay-{arch}.deb` asset; 1hr in-memory cache. Previous `.deb` retained for rollback. Settings page gains an About section (all users) showing installed vs latest version with update/rollback controls for admins. Frontend polls `/api/health` after triggering restart and refreshes when server comes back.
 - **Phase 5 Extended** (complete): User Management gains inline `owner_name` field and Audible Account dropdown (sets `users.audible_account_id`). Liberate page gains owner filter tabs, centered search bar (300ms debounce), per-book Mark Downloaded/Not Downloaded (`PATCH /api/liberate/books/{book_id}`), Multi Select mode with Select All spanning all pages (via `GET /api/liberate/book-ids`) plus bulk mark actions, and per-page selector [24/48/96/200]. Accounts page shows post-login "go to Downloads → Scan Library" info banner. Liberate moved to top of sidebar and set as default view (`/` redirects to `/liberate`). Library and My Books removed from sidebar nav and routes entirely (pages still exist in codebase but are not linked).
 
 ## Conventions
