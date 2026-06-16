@@ -75,7 +75,8 @@
 ## Phase 5 — Liberate View, My Books & Per-User Permissions ✅
 
 ### Sidebar additions ✅
-- [x] New entries: **My Books** (`/my-books`) and **Liberate** (`/liberate`)
+- [x] **Liberate** (`/liberate`) added as primary nav item and default view
+- [x] My Books and Library tabs later removed as redundant — Liberate covers both use cases
 
 ### Liberate View (`/liberate`) ✅
 - [x] All books from LibationData.db in the same grid layout as Library
@@ -119,8 +120,6 @@
 
 ---
 
----
-
 ## Phase 5 — Post-Release Bug Fix ✅
 - [x] Root cause of "Error processing book. Skipping." (downloads completed instantly with no file written)
   - `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` caused `CultureInfo.GetCultures()` to return only Invariant Culture (ID 0x7F); `new RegionInfo(c)` throws `ArgumentException` inside `LocaleDto.GetRegion()` → propagates through `DownloadOptions..ctor` → `BuildDownloadOptions` → `DownloadDecryptBook.ProcessAsync`
@@ -143,14 +142,12 @@
 - [x] **Multi Select mode** — checkbox overlay on each tile; Select All fetches all matching IDs via `GET /api/liberate/book-ids` (no pagination, spans all pages); bulk "Mark Downloaded" and "Mark Not Downloaded" actions
 - [x] **Per-page selector** — PAGE_SIZES [24, 48, 96, 200]; placed in pagination row
 
-### Library Page ✅
-- [x] **Owner filter tabs** — same style as Liberate; passes `account_id` to `GET /api/library/books`
-
 ### Accounts Page ✅
 - [x] **Post-login banner** — after successful Audible login, shows brand-blue info banner: "Account connected — one more step! Go to Downloads and click Scan Library"; dismissable with ✕
 
 ### Navigation ✅
-- [x] **Liberate moved to top** of sidebar nav and made the **default view** (`/` → redirect `/liberate`); Library moved to `/library`
+- [x] **Liberate moved to top** of sidebar nav and made the **default view** (`/` → redirect `/liberate`)
+- [x] **Library and My Books removed** from sidebar and routes; stale URLs redirect to `/liberate`
 
 ---
 
