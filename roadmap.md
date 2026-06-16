@@ -177,5 +177,33 @@
 
 ---
 
+## Phase 6 — Observability, Distribution & Branding ✅
+
+### Persistent CLI logging ✅
+- [x] `backend/app/services/logger.py` — `RotatingFileHandler` writing to `/config/logs/libation-web.log` (5MB × 3 files), so Unraid users get debuggable logs without SSH
+- [x] `log_cli()` helper logs command, exit code, elapsed time, and output (truncated at 20KB)
+- [x] Wired into `list_accounts`, `start_login`, `complete_login`, `run_scan`, `_fetch_license`, `run_liberate`
+- [x] OAuth tokens/response URLs intentionally excluded from logs (security)
+- [x] Startup/shutdown lifecycle events logged in `main.py`
+
+### Log viewer (Settings page) ✅
+- [x] `GET /api/logs` (admin only) — tail with line-count and level filters; `GET /api/logs/download` for raw file download
+- [x] Embedded as a Card in Settings below the About section (visible only to `is_admin`) — not a separate route/sidebar tab
+- [x] Level filter tabs, line count selector, auto-refresh toggle, color-coded log lines
+
+### React resilience ✅
+- [x] Root `ErrorBoundary` component wraps the whole app — catches render crashes instead of leaving a blank white page with a dead back button
+
+### Dual registry publishing ✅
+- [x] Image published to both Docker Hub (`jtechguru1993/libation-web:latest`) and GitHub Container Registry (`ghcr.io/jtechguru1/libation-web:latest`), kept in sync on every push
+- [x] README and Unraid template updated to reference both
+
+### Branding fix ✅
+- [x] Replaced default favicon and sidebar headphones icon with official Libation branding (`libation_logo_dark.svg` for sidebar, `favicon.svg` + `libation.ico` fallback for browser tab)
+- [x] Root-cause fix: `spa_fallback` route in `main.py` was returning `index.html` for every static asset not under `/assets` (favicons, logos, etc.) — now checks if the file exists on disk first
+- [x] Unraid template `<Icon>` URL fixed (was pointing at a 404'd `libation-square.png`; now points at the actual colored Libation app icon)
+
+---
+
 ## Phase 7 — Future (not built)
 - [ ] Cap usage banner: "N / cap downloads used · Resets in Xh Ym" (use `resets_at` from 429 response)
