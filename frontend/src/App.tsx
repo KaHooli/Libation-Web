@@ -4,11 +4,9 @@ import { ThemeProvider } from "@/context/ThemeContext";
 import { Layout } from "@/components/layout/Layout";
 import { LoginPage } from "@/pages/LoginPage";
 import { TwoFactorPage } from "@/pages/TwoFactorPage";
-import { LibraryPage } from "@/pages/LibraryPage";
 import { AccountsPage } from "@/pages/AccountsPage";
 import { DownloadsPage } from "@/pages/DownloadsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
-import { MyBooksPage } from "@/pages/MyBooksPage";
 import { LiberatePage } from "@/pages/LiberatePage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -38,8 +36,6 @@ function AppRoutes() {
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route path="/" element={<Navigate to="/liberate" replace />} />
         <Route path="/liberate" element={<LiberatePage />} />
-        <Route path="/library" element={<LibraryPage />} />
-        <Route path="/my-books" element={<MyBooksPage />} />
         <Route path="/downloads" element={<DownloadsPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

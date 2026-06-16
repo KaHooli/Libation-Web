@@ -2,15 +2,13 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
-  BookOpen, Download, Users, Settings, LogOut, Headphones, X, Menu, Moon, Sun,
-  BookMarked, Unlock,
+  Download, Users, Settings, LogOut, Headphones, X, Menu, Moon, Sun,
+  Unlock,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const NAV = [
   { to: "/liberate", label: "Liberate", icon: Unlock },
-  { to: "/library", label: "Library", icon: BookOpen },
-  { to: "/my-books", label: "My Books", icon: BookMarked },
   { to: "/downloads", label: "Downloads", icon: Download },
   { to: "/accounts", label: "Accounts", icon: Users },
   { to: "/settings", label: "Settings", icon: Settings },
