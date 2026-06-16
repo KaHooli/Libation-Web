@@ -32,13 +32,13 @@ if [ "$PUID" != "0" ]; then
     if getent group libation > /dev/null 2>&1; then
         groupmod -g "$PGID" libation 2>/dev/null || true
     else
-        groupadd -g "$PGID" libation
+        groupadd -o -g "$PGID" libation
     fi
 
     if getent passwd libation > /dev/null 2>&1; then
         usermod -u "$PUID" -g "$PGID" libation 2>/dev/null || true
     else
-        useradd -u "$PUID" -g "$PGID" -s /bin/bash -M libation
+        useradd -o -u "$PUID" -g "$PGID" -s /bin/bash -M libation
     fi
 
     mkdir -p /home/libation
