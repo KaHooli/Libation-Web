@@ -14,10 +14,6 @@ const NAV = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
-const ADMIN_NAV = [
-  { to: "/logs", label: "Logs", icon: ScrollText },
-];
-
 interface SidebarProps {
   open: boolean;
   onClose: () => void;
@@ -83,37 +79,26 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                   <Icon className="h-4 w-4 shrink-0" />
                   {label}
                 </NavLink>
+                {to === "/settings" && user?.is_admin && (
+                  <NavLink
+                    to="/logs"
+                    onClick={onClose}
+                    className={({ isActive }) =>
+                      cn(
+                        "flex items-center gap-3 rounded-lg pl-9 pr-3 py-2 text-sm font-medium transition-colors mt-0.5",
+                        isActive
+                          ? "bg-brand-600 text-white"
+                          : "text-slate-500 hover:bg-slate-800 hover:text-white"
+                      )
+                    }
+                  >
+                    <ScrollText className="h-3.5 w-3.5 shrink-0" />
+                    Logs
+                  </NavLink>
+                )}
               </li>
             ))}
           </ul>
-          {user?.is_admin && (
-            <>
-              <p className="mt-4 mb-1 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-600">
-                Admin
-              </p>
-              <ul className="space-y-0.5">
-                {ADMIN_NAV.map(({ to, label, icon: Icon }) => (
-                  <li key={to}>
-                    <NavLink
-                      to={to}
-                      onClick={onClose}
-                      className={({ isActive }) =>
-                        cn(
-                          "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                          isActive
-                            ? "bg-brand-600 text-white"
-                            : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                        )
-                      }
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      {label}
-                    </NavLink>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
         </nav>
 
         {/* User footer */}
