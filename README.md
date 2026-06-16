@@ -92,8 +92,8 @@ Rotates at 5MB, keeps 3 backups (`libation-web.log`, `.1`, `.2`, `.3`). OAuth to
 | Variable                      | Default      | Description                                        |
 |-------------------------------|--------------|----------------------------------------------------|
 | `SECRET_KEY`                  | (required)   | JWT signing key — **generate a strong random value** |
-| `ADMIN_USERNAME`              | `admin`      | Initial admin username                             |
-| `ADMIN_PASSWORD`              | `admin`      | Initial admin password — **change on first login** |
+| `ADMIN_USERNAME`              | `admin`      | Initial admin username — only used on **first run** (before `app.db` exists); ignored after that |
+| `ADMIN_PASSWORD`              | `admin`      | Initial admin password — only used on **first run**; to change after first run use Settings → Change Password |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `15`         | Access token lifetime                              |
 | `REFRESH_TOKEN_EXPIRE_DAYS`   | `60`         | Refresh token / session lifetime                   |
 | `PUID`                        | `1000`       | User ID for file ownership (Unraid: 99)            |
