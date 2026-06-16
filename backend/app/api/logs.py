@@ -2,7 +2,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from ..api.auth import require_admin
+from ..api.users import require_admin
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
