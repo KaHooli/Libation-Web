@@ -221,8 +221,8 @@ export function LiberatePage() {
     return () => clearTimeout(t);
   }, [inputValue]);
 
-  const loadBooks = useCallback(async () => {
-    setLoading(true);
+  const loadBooks = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const params: Record<string, unknown> = { filter_status: filter, page, page_size: pageSize };
       if (ownerAccountId) params.account_id = ownerAccountId;
@@ -231,20 +231,35 @@ export function LiberatePage() {
         api.get("/liberate/books", { params }),
         api.get("/liberate/cap"),
       ]);
-      setBooks(booksRes.data.books);
-      setTotal(booksRes.data.total);
+      const incoming: LiberateBook[] = booksRes.data.books;
+      if (silent) {
+        // Only replace books whose status or progress actually changed to
+        // avoid re-rendering unchanged tiles and resetting scroll position
+        setBooks(prev => {
+          const map = new Map(incoming.map(b => [b.book_id, b]));
+          return prev.map(b => {
+            const u = map.get(b.book_id);
+            if (!u) return b;
+            if (u.liberate_status === b.liberate_status && u.download_progress === b.download_progress) return b;
+            return u;
+          });
+        });
+      } else {
+        setBooks(incoming);
+        setTotal(booksRes.data.total);
+      }
       setCap(capRes.data);
-    } catch { setError("Failed to load books."); }
-    finally { setLoading(false); }
+    } catch { if (!silent) setError("Failed to load books."); }
+    finally { if (!silent) setLoading(false); }
   }, [filter, page, pageSize, ownerAccountId, search]);
 
   useEffect(() => { loadBooks(); }, [loadBooks]);
 
-  // Poll while any book is downloading
+  // Poll while any book is downloading — silent so the grid never flickers
   useEffect(() => {
     const hasActive = books.some(b => b.liberate_status === "downloading");
     if (!hasActive) return;
-    const t = setInterval(loadBooks, 2000);
+    const t = setInterval(() => loadBooks(true), 2000);
     return () => clearInterval(t);
   }, [books, loadBooks]);
 
@@ -433,7 +448,7 @@ export function LiberatePage() {
 
         {/* Action buttons */}
         <div className="flex items-center gap-2 flex-wrap">
-          <Button variant="outline" size="sm" onClick={loadBooks}>
+          <Button variant="outline" size="sm" onClick={() => loadBooks()}>
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
 
