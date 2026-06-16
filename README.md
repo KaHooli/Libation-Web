@@ -81,6 +81,113 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ---
 
+## Installing on Unraid
+
+> **Note:** These instructions assume the image is available at `ghcr.io/jtechguru1/libation-web:latest`.
+
+### Step 1 — Add the container
+
+1. In the Unraid web UI go to the **Docker** tab
+2. Click **Add Container**
+
+Fill in these basic fields:
+
+| Field | Value |
+|-------|-------|
+| Name | `LibationWeb` |
+| Repository | `ghcr.io/jtechguru1/libation-web:latest` |
+| Network Type | `Bridge` |
+| Web UI | `http://[IP]:[PORT:8000]/` |
+
+---
+
+### Step 2 — Port mapping
+
+Click **Add another Path, Port, Variable, Label or Device** → select **Port**
+
+| Field | Value |
+|-------|-------|
+| Container Port | `8000` |
+| Host Port | `8000` |
+| Protocol | `TCP` |
+
+---
+
+### Step 3 — Volume paths
+
+Add three paths via **Add another Path, Port, Variable, Label or Device** → **Path**:
+
+**1. App database** (users, sessions, download history)
+
+| Field | Value |
+|-------|-------|
+| Container Path | `/data` |
+| Host Path | `/mnt/user/appdata/libation/data` |
+| Access Mode | Read/Write |
+
+**2. Libation config** (Audible account tokens, book database)
+
+| Field | Value |
+|-------|-------|
+| Container Path | `/config` |
+| Host Path | `/mnt/user/appdata/libation/config` |
+| Access Mode | Read/Write |
+
+**3. Audiobooks** (downloaded files)
+
+| Field | Value |
+|-------|-------|
+| Container Path | `/audiobooks` |
+| Host Path | `/mnt/user/audiobooks` |
+| Access Mode | Read/Write |
+
+> Change `/mnt/user/audiobooks` to match your actual media share path on Unraid.
+
+---
+
+### Step 4 — Environment variables
+
+Add each via **Add another Path, Port, Variable, Label or Device** → **Variable**:
+
+| Variable | Value | Notes |
+|----------|-------|-------|
+| `PUID` | `99` | Unraid's standard `nobody` user — leave as `99` |
+| `PGID` | `100` | Unraid's standard `users` group — leave as `100` |
+| `SECRET_KEY` | *(make one up — see below)* | **Required** |
+| `ADMIN_USERNAME` | `admin` | Your admin login username |
+| `ADMIN_PASSWORD` | *(strong password)* | **Do not leave as default** |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Leave as default |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `60` | Leave as default |
+
+**Setting your SECRET_KEY:**
+Make up any random string of 32 or more characters and type it in. Letters, numbers, and symbols like `!@#%^&*-_+=` are all fine. Just avoid `"` (double quote), `$` (dollar sign), `\` (backslash), and spaces as these can cause issues in environment variables.
+
+Example of a valid key: `k7m2p9q4n8r3t6w1x5y0z2a4b7c9d1e3`
+
+> The SECRET_KEY signs your login tokens. It never needs to be remembered or typed again — just make it random and don't share it.
+
+---
+
+### Step 5 — Apply and open
+
+Click **Apply**. Unraid will pull the image and start the container. Once it shows as running, open:
+
+```
+http://[your-unraid-ip]:8000
+```
+
+Log in with your `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+
+---
+
+### Step 6 — First-time setup
+
+1. Go to **Accounts** → **Add Account** and connect your Audible account
+2. After login completes a banner will appear — click through to **Downloads** → **Scan Library**
+3. Once the scan finishes your books appear on the **Liberate** page ready to download
+
+---
+
 ## Credits
 
 - **[Libation](https://github.com/rmcrackan/Libation)** by [@rmcrackan](https://github.com/rmcrackan) — the audiobook manager this wraps
