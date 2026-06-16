@@ -150,7 +150,7 @@ Add three paths via **Add another Path, Port, Variable, Label or Device** → **
 | Host Path | `/mnt/user/appdata/libation/data` |
 | Access Mode | Read/Write |
 
-**2. Libation config** (Audible account tokens, book database)
+**2. Libation config** (Audible account tokens, book database, **and app logs** — no separate path needed for logging, it lives at `/config/logs/libation-web.log` inside this same volume)
 
 | Field | Value |
 |-------|-------|
