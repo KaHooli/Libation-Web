@@ -63,6 +63,20 @@ Open `http://localhost:8000` — log in with your configured credentials, then g
 
 ---
 
+## Logging
+
+All LibationCLI command output (scans, downloads, account logins) is written to a rotating log file on the `/config` volume, so it survives container restarts and is readable without SSH access — useful for debugging on Unraid.
+
+| What | Where |
+|------|-------|
+| Log file (in container) | `/config/logs/libation-web.log` |
+| Log file (Unraid host)  | `/mnt/user/appdata/libation/config/logs/libation-web.log` |
+| In-app viewer | **Settings → Logs** (admin only) — filter by level, adjust line count, download raw file |
+
+Rotates at 5MB, keeps 3 backups (`libation-web.log`, `.1`, `.2`, `.3`). OAuth tokens and login response URLs are never logged.
+
+---
+
 ## Adding an Audible account
 
 1. Go to **Accounts** → **Add Account**
@@ -196,6 +210,8 @@ Log in with your `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
 1. Go to **Accounts** → **Add Account** and connect your Audible account
 2. After login completes a banner will appear — click through to **Downloads** → **Scan Library**
 3. Once the scan finishes your books appear on the **Liberate** page ready to download
+
+If something goes wrong, logs are at `/mnt/user/appdata/libation/config/logs/libation-web.log` on the host, or in-app under **Settings → Logs** — no SSH needed. See [Logging](#logging) above.
 
 ---
 
