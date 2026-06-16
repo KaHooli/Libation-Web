@@ -27,6 +27,17 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 
 ---
 
+## Images
+
+The image is published to two registries — use whichever you prefer:
+
+| Registry | Image |
+|----------|-------|
+| Docker Hub | `jtechguru1993/libation-web:latest` |
+| GitHub Container Registry | `ghcr.io/jtechguru1/libation-web:latest` |
+
+---
+
 ## Quick start
 
 ```bash
@@ -34,7 +45,7 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 cp .env.example .env
 # Edit .env — set a strong SECRET_KEY and change the admin credentials
 
-# Start
+# Start (uses ghcr.io by default — edit docker-compose.yml to switch to Docker Hub)
 docker compose up -d
 ```
 
@@ -83,7 +94,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Installing on Unraid
 
-> **Note:** These instructions assume the image is available at `ghcr.io/jtechguru1/libation-web:latest`.
+> **Note:** You can use either `jtechguru1993/libation-web:latest` (Docker Hub) or `ghcr.io/jtechguru1/libation-web:latest` (GitHub Container Registry) — both are kept in sync.
 
 ### Step 1 — Add the container
 
