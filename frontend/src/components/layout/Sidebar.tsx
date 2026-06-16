@@ -3,7 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
   Download, Users, Settings, LogOut, Headphones, X, Menu, Moon, Sun,
-  Unlock, ScrollText,
+  Unlock,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
@@ -79,23 +79,6 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                   <Icon className="h-4 w-4 shrink-0" />
                   {label}
                 </NavLink>
-                {to === "/settings" && user?.is_admin && (
-                  <NavLink
-                    to="/logs"
-                    onClick={onClose}
-                    className={({ isActive }) =>
-                      cn(
-                        "flex items-center gap-3 rounded-lg pl-9 pr-3 py-2 text-sm font-medium transition-colors mt-0.5",
-                        isActive
-                          ? "bg-brand-600 text-white"
-                          : "text-slate-500 hover:bg-slate-800 hover:text-white"
-                      )
-                    }
-                  >
-                    <ScrollText className="h-3.5 w-3.5 shrink-0" />
-                    Logs
-                  </NavLink>
-                )}
               </li>
             ))}
           </ul>
