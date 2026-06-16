@@ -8,6 +8,7 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 ### Single-container deployment
 - **Backend**: Python 3.12 + FastAPI, served on port 8000
 - **Frontend**: React 18 + Vite + Tailwind CSS, built to `/app/static` and served as static files by FastAPI
+  - Only `/assets` (Vite's JS/CSS bundles) is mounted via `StaticFiles`. The catch-all `spa_fallback` route in `main.py` checks if the requested path exists as a file under `/app/static` first (serves it directly) before falling back to `index.html` — needed so root-level files in `frontend/public/` (favicons, logos, etc.) actually get served instead of silently returning the SPA shell
 - **LibationCli**: Installed from the official `.deb` (`/usr/bin/libationcli`)
 
 ### Volume layout
