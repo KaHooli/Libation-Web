@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
-  Download, Users, Settings, LogOut, Headphones, X, Menu, Moon, Sun,
+  Download, Users, Settings, LogOut, X, Menu, Moon, Sun,
   Unlock,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
@@ -45,9 +45,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         {/* Logo */}
         <div className="flex items-center justify-between px-5 py-5 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600">
-              <Headphones className="h-4 w-4 text-white" />
-            </div>
+            <img src="/libation.ico" alt="Libation" className="h-8 w-8 rounded-lg" />
             <span className="text-lg font-bold text-white tracking-tight">Libation</span>
           </div>
           <button
