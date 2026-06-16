@@ -45,7 +45,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         {/* Logo */}
         <div className="flex items-center justify-between px-5 py-5 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <img src="/libation.png" alt="Libation" className="h-8 w-8 rounded-lg" />
+            <img src="/libation_logo_dark.svg" alt="Libation" className="h-8 w-8" />
             <span className="text-lg font-bold text-white tracking-tight">Libation</span>
           </div>
           <button
