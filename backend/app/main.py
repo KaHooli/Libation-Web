@@ -61,19 +61,35 @@ def _migrate_db(db: Session) -> None:
 
 
 def _seed_admin(db: Session) -> None:
-    if not get_user_by_username(db, settings.ADMIN_USERNAME):
-        db.add(User(
-            username=settings.ADMIN_USERNAME,
-            hashed_password=hash_password(settings.ADMIN_PASSWORD),
-            is_admin=True,
-        ))
-        db.commit()
-        print(f"[Libation] Created admin user: {settings.ADMIN_USERNAME!r}")
-    else:
-        existing = get_user_by_username(db, settings.ADMIN_USERNAME)
-        if existing and not existing.is_admin:
-            existing.is_admin = True
+    # Use the same raw-SQL approach as _migrate_db so there are no ORM mapper
+    # interactions with the dangling connection that _migrate_db may leave open.
+    try:
+        conn = db.connection()
+        row = conn.execute(
+            text("SELECT id FROM users WHERE username = :u"),
+            {"u": settings.ADMIN_USERNAME},
+        ).first()
+        if row is None:
+            conn.execute(
+                text(
+                    "INSERT INTO users (username, hashed_password, totp_enabled, is_active, is_admin)"
+                    " VALUES (:u, :pw, 0, 1, 1)"
+                ),
+                {"u": settings.ADMIN_USERNAME, "pw": hash_password(settings.ADMIN_PASSWORD)},
+            )
             db.commit()
+            print(f"[Libation] Created admin user: {settings.ADMIN_USERNAME!r}", flush=True)
+        else:
+            conn.execute(
+                text("UPDATE users SET is_admin = 1 WHERE username = :u AND is_admin = 0"),
+                {"u": settings.ADMIN_USERNAME},
+            )
+            db.commit()
+    except Exception as exc:
+        import traceback
+        print(f"[Libation] ERROR seeding admin user: {exc}", flush=True)
+        traceback.print_exc()
+        get_logger().error("[startup] Failed to seed admin user: %s", exc, exc_info=True)
 
 
 @asynccontextmanager

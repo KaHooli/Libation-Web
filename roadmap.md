@@ -52,7 +52,7 @@
 - [x] Download button on library BookCards (appears on hover)
 - [x] Accounts management page (3-step login flow: form → copy URL → paste response)
 - [x] Downloads page (active queue, failed, completed, scan status banner)
-- [x] Note: account removal not implemented — LibationCli has no remove-account command
+- [x] Account removal implemented in Phase 7 via direct edit of `/config/AccountsSettings.json` (LibationCLI has no remove-account command)
 
 ---
 
@@ -205,5 +205,46 @@
 
 ---
 
-## Phase 7 — Future (not built)
+## Phase 7 — LibationBridge Sidecar ✅
+
+Replaced `libationcli` subprocess calls for downloads and scans with a LibationBridge ASP.NET Core 10 sidecar that references Libation DLLs directly. Gives real `StreamingProgressChanged` events (0–100%) instead of fake 5/95 progress jumps from stdout parsing, and eliminates per-download subprocess overhead.
+
+### Bridge binary ✅
+- [x] `libation-bridge/` — new C# minimal API project (ASP.NET Core 10); built as self-contained single-file binary placed at `/usr/lib/libation/libation-bridge` (symlinked from `/usr/local/bin/libation-bridge`)
+- [x] References Libation DLLs at `/usr/lib/libation/` via `<Reference>` with `<Private>false</Private>` — DLLs not bundled into binary, loaded at runtime via `AssemblyResolve` hook
+- [x] `AssemblyResolve` hook registered before any Libation type is touched; all Libation code isolated in `static class LibationBridgeApp` with `[MethodImpl(MethodImplOptions.NoInlining)]` to prevent JIT resolving DLLs before hook fires
+- [x] Libation scaffolding called via `AppScaffolding.LibationScaffolding.RunPreConfigMigrations()` + `RunPostConfigMigrations()` + `RunPostMigrationScaffolding()` at startup
+- [x] Config path fix: `Directory.SetCurrentDirectory("/config")` in `Program.cs`; entrypoint pre-seeds `/config/Libation/appsettings.json` with `{"LibationFiles":"/config"}` so Libation's bootstrap discovery finds `/config` as its files dir — the same path `libationcli --libationFiles /config` uses, meaning both share `/config/LibationContext.db`
+
+### Bridge API surface ✅
+- [x] `GET /health` — readiness probe (`{"status":"ok"}`)
+- [x] `GET /debug` — diagnostic: DB path + book count + sample ASINs
+- [x] `GET /accounts` — shim over `libationcli list-accounts --bare`; returns parsed tab-separated account list
+- [x] `POST /scan` — synchronous: holds connection until `libationcli scan` exits; returns `{"exit_code","output"}`; Kestrel keepalive set to 12 min
+- [x] `POST /download/{asin}` — 202 immediately; starts `DownloadDecryptBook.ProcessAsync(book)` in background Task; `StreamingProgressChanged` handler updates in-memory `_progress[asin]`
+- [x] `GET /progress/{asin}` — returns `{"asin","progress","status","output"}` or 404
+- [x] `POST /download-all` — 202 immediately; fires `libationcli liberate --force` in background Task
+- [x] Completed progress entries expire after 1 hour via background cleanup Task
+
+### Dockerfile ✅
+- [x] `bridge-builder` stage (Stage 2, between frontend-builder and runtime): installs Libation `.deb` so MSBuild can resolve `<HintPath>/usr/lib/libation/*.dll>` at compile time; builds self-contained single-file binary with `dotnet publish -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false`; arch auto-detected (`amd64`/`arm64`)
+- [x] Runtime stage copies binary to `/usr/lib/libation/libation-bridge`; symlinked to `/usr/local/bin/libation-bridge`
+
+### Entrypoint integration ✅
+- [x] Bridge starts before uvicorn on each loop iteration; `wait_for_bridge()` polls `GET /health` up to 30s
+- [x] Both `BRIDGE_PID` and `UVICORN_PID` tracked; bridge killed when uvicorn exits and restarted on next iteration
+- [x] `cleanup()` SIGTERM handler kills both processes
+- [x] Entrypoint pre-seeds `/config/Libation/appsettings.json` with correct files dir every startup
+
+### Python integration ✅
+- [x] `BRIDGE_URL = "http://localhost:8001"` added to `backend/app/config.py`
+- [x] `backend/app/services/cli.py`: `run_liberate()` → bridge `POST /download/{asin}` + poll `GET /progress/{asin}` every 2s; `run_scan()` → bridge `POST /scan`; `list_accounts()` → bridge `GET /accounts`
+- [x] Login flow (`start_login` / `complete_login`) stays as PTY subprocess — `libationcli login-external` requires PTY allocation
+
+### Accounts ✅
+- [x] `DELETE /api/accounts/{account_id}` — directly edits `/config/AccountsSettings.json`, filters out the matching entry, writes back; resolves "account removal not implemented" from Phase 3
+
+---
+
+## Future (not built)
 - [ ] Cap usage banner: "N / cap downloads used · Resets in Xh Ym" (use `resets_at` from 429 response)

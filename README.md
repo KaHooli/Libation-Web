@@ -11,11 +11,11 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 - **Liberate view** — default landing page; shows your full Audible library with download status overlays (downloaded ✓, not downloaded ✕, in-progress spinner)
 - **Filter & search** — filter by status (All / Downloaded / Not Downloaded / In Progress / Audible Plus), search by title, filter by owner
 - **Owner tabs** — link each web UI user to an Audible account; books are filterable by owner
-- **Download management** — one-click download per book, Download All (uncapped), Download Next N (capped users); 2-second polling while downloads are active
+- **Download management** — one-click download per book, Download All (uncapped), Download Next N (capped users); real-time progress bars (0–100%) via LibationBridge; 2-second polling while downloads are active
 - **Mark as downloaded** — manually set a book's status so LibationCLI treats it as already liberated
 - **Multi-select** — select individual books or Select All (across all pages), then bulk Mark Downloaded / Mark Not Downloaded
 - **Per-page selector** — choose 24 / 48 / 96 / 200 books per page
-- **Accounts page** — add Audible accounts via `login-external` OAuth flow (3-step: form → copy URL → paste response)
+- **Accounts page** — add or remove Audible accounts; add via `login-external` OAuth flow (3-step: form → copy URL → paste response)
 - **Downloads page** — active queue with progress bars, failed/completed history, library scan trigger
 - **Multi-user support** — admin can create/disable/delete users; per-user permission flags and 12-hour rolling download caps
 - **User management** — set owner name and link each user to an Audible account
@@ -58,7 +58,7 @@ Open `http://localhost:8000` — log in with your configured credentials, then g
 | Host path      | Container path | Purpose                              |
 |----------------|---------------|--------------------------------------|
 | `./data`       | `/data`       | App database (users, sessions)       |
-| `./config`     | `/config`     | Libation config + `LibationData.db`  |
+| `./config`     | `/config`     | Libation config + `LibationContext.db`  |
 | `./audiobooks` | `/audiobooks` | Downloaded audiobook files           |
 
 ---
