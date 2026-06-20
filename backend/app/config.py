@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     LIBATION_CONFIG: str = "/config"
     AUDIOBOOKS_DIR: str = "/audiobooks"
 
+    BRIDGE_URL: str = "http://localhost:8001"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

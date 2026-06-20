@@ -6,7 +6,44 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-# ── Stage 2: Runtime ─────────────────────────────────────────────────────────
+# ── Stage 2: Build LibationBridge ────────────────────────────────────────────
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS bridge-builder
+
+ARG LIBATION_VERSION=13.4.9
+
+# Install deps needed to run the Libation .deb post-install scripts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        wget \
+        ca-certificates \
+        libgtk-3-bin \
+        libglib2.0-0 \
+        libfontconfig1 \
+        libx11-6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install the Libation .deb so MSBuild can resolve <HintPath>/usr/lib/libation/*.dll
+RUN ARCH=$(dpkg --print-architecture) && \
+    wget -q -O /tmp/libation.deb \
+        "https://github.com/rmcrackan/Libation/releases/download/v${LIBATION_VERSION}/Libation.${LIBATION_VERSION}-linux-chardonnay-${ARCH}.deb" && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends /tmp/libation.deb && \
+    rm -f /tmp/libation.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /bridge
+COPY libation-bridge/ ./
+
+# Build self-contained single-file binary; arch matched to host at build time
+RUN ARCH=$(dpkg --print-architecture) && \
+    DOTNET_ARCH=$([ "$ARCH" = "arm64" ] && echo "linux-arm64" || echo "linux-x64") && \
+    dotnet publish -c Release \
+        -r "$DOTNET_ARCH" \
+        --self-contained true \
+        -p:PublishSingleFile=true \
+        -p:PublishTrimmed=false \
+        -o /bridge/out
+
+# ── Stage 3: Runtime ─────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
 ARG LIBATION_VERSION=13.4.9
@@ -37,6 +74,12 @@ RUN ARCH=$(dpkg --print-architecture) && \
     apt-get install -y --no-install-recommends /tmp/libation.deb && \
     rm -f /tmp/libation.deb && \
     rm -rf /var/lib/apt/lists/*
+
+# LibationBridge binary — placed in /usr/lib/libation/ so the .NET single-file host
+# probes that directory for the sibling Libation DLLs (AppScaffolding.dll, etc.)
+COPY --from=bridge-builder /bridge/out/LibationBridge /usr/lib/libation/libation-bridge
+RUN chmod +x /usr/lib/libation/libation-bridge && \
+    ln -s /usr/lib/libation/libation-bridge /usr/local/bin/libation-bridge
 
 # Python dependencies
 COPY backend/requirements.txt ./

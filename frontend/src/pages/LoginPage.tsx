@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Headphones, Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { authApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -49,9 +49,7 @@ export function LoginPage() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-600 shadow-lg mb-4">
-            <Headphones className="h-7 w-7 text-white" />
-          </div>
+          <img src="/favicon.svg" alt="Libation" className="h-14 w-14 rounded-2xl shadow-lg mb-4" />
           <h1 className="text-2xl font-bold text-slate-900">Libation</h1>
           <p className="text-sm text-slate-500 mt-1">Sign in to your audiobook library</p>
         </div>

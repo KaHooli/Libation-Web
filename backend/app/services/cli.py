@@ -7,10 +7,14 @@ import time
 import uuid
 from typing import Callable, Awaitable, Optional
 
+import httpx
+
 from ..config import settings
 from .logger import get_logger, log_cli
 
-_PENDING_LOGINS: dict[str, dict] = {}  # session_id → {email, locale, master_fd, proc}
+# ── PTY state (kept for login-external flow) ──────────────────────────────────
+
+_PENDING_LOGINS: dict[str, dict] = {}
 
 
 def _cmd(*args: str) -> list[str]:
@@ -18,8 +22,6 @@ def _cmd(*args: str) -> list[str]:
 
 
 def _env() -> dict:
-    """Environment for LibationCli subprocesses — ensures HOME is a real Linux path."""
-    import os
     env = os.environ.copy()
     env["HOME"] = "/home/libation"
     return env
@@ -31,7 +33,6 @@ async def _read_fd_until(fd: int, pattern: str, timeout: float) -> str:
     chunks: list[str] = []
     done = asyncio.Event()
 
-    # Make fd non-blocking so add_reader works correctly
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
@@ -83,39 +84,31 @@ async def _drain_fd(fd: int, timeout: float) -> str:
     return "".join(chunks)
 
 
-# ── Accounts ─────────────────────────────────────────────────────────────────
+# ── Bridge helpers ────────────────────────────────────────────────────────────
+
+def _bridge(path: str) -> str:
+    return f"{settings.BRIDGE_URL}{path}"
+
+
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
+_SCAN_TIMEOUT    = httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=5.0)
+_PROGRESS_INTERVAL = 2.0  # seconds between progress polls
+
+
+# ── Accounts ──────────────────────────────────────────────────────────────────
 
 async def list_accounts() -> list[dict]:
     t0 = time.monotonic()
-    proc = await asyncio.create_subprocess_exec(
-        *_cmd("list-accounts", "--bare"),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=_env(),
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-    log_cli("list-accounts --bare", proc.returncode, (stdout + stderr).decode(), time.monotonic() - t0)
-    accounts = []
-    for line in stdout.decode().strip().splitlines():
-        parts = line.split("\t")
-        if len(parts) >= 5:
-            accounts.append({
-                "account_id": parts[0].strip(),
-                "name": parts[1].strip(),
-                "locale": parts[2].strip(),
-                "scan_library": parts[3].strip().lower() == "true",
-                "authenticated": parts[4].strip().lower() == "true",
-            })
+    async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+        resp = await client.get(_bridge("/accounts"))
+        resp.raise_for_status()
+    accounts = resp.json()
+    log_cli("bridge/accounts", 0, f"{len(accounts)} account(s)", time.monotonic() - t0)
     return accounts
 
 
 async def start_login(email: str, locale: str) -> dict:
-    """Start login-external via a PTY so LibationCli sees a real terminal.
-
-    LibationCli v13 refuses to print the login URL when stdin is not a TTY.
-    We allocate a pty pair, attach the slave end to the process, and read
-    the URL from the master end without blocking the event loop.
-    """
+    """Start login-external via PTY. Kept in Python — PTY allocation is simpler here."""
     logger = get_logger()
     logger.info("[login] Starting login-external for %s (%s)", email, locale)
     t0 = time.monotonic()
@@ -153,8 +146,7 @@ async def start_login(email: str, locale: str) -> dict:
             pass
         logger.error("[login] login-external exited (%s) without a login URL for %s", proc.returncode, email)
         raise RuntimeError(
-            f"LibationCli exited ({proc.returncode}) without producing a login URL.\n"
-            + output
+            f"LibationCli exited ({proc.returncode}) without producing a login URL.\n" + output
         )
 
     login_url = match.group(0).rstrip(".")
@@ -211,74 +203,36 @@ async def complete_login(session_id: str, response_url: str) -> str:
         pass
 
     if proc.returncode != 0:
-        logger.error("[login] complete_login FAILED for %s → exit %s (%.1fs)\n%s", email, proc.returncode, time.monotonic() - t0, output)
+        logger.error("[login] complete_login FAILED for %s → exit %s (%.1fs)\n%s",
+                     email, proc.returncode, time.monotonic() - t0, output)
         raise RuntimeError(f"Login failed (exit {proc.returncode}).\n{output}")
 
     logger.info("[login] complete_login OK for %s (%.1fs)", email, time.monotonic() - t0)
     return output
 
 
-# ── Library scan ─────────────────────────────────────────────────────────────
+# ── Library scan ──────────────────────────────────────────────────────────────
 
 async def run_scan(
     on_line: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> tuple[int, str]:
     logger = get_logger()
-    logger.info("[scan] Starting library scan")
+    logger.info("[scan] Starting library scan via bridge")
     t0 = time.monotonic()
-
-    # Clear stale Lucene write lock left by previously killed scans
-    lock_path = f"{settings.LIBATION_CONFIG}/SearchEngine/write.lock"
-    try:
-        if os.path.exists(lock_path):
-            os.remove(lock_path)
-    except OSError:
-        pass
-
-    proc = await asyncio.create_subprocess_exec(
-        *_cmd("scan"),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env=_env(),
-    )
-    lines: list[str] = []
-    async for raw in proc.stdout:
-        text = raw.decode().rstrip()
-        lines.append(text)
-        if on_line:
-            await on_line(text)
-    await proc.wait()
-    output = "\n".join(lines)
-    log_cli("scan", proc.returncode, output, time.monotonic() - t0)
-    return proc.returncode, output
+    async with httpx.AsyncClient(timeout=_SCAN_TIMEOUT) as client:
+        resp = await client.post(_bridge("/scan"))
+        resp.raise_for_status()
+    data = resp.json()
+    exit_code: int = data.get("exit_code", 0)
+    output: str = data.get("output", "")
+    log_cli("bridge/scan", exit_code, output, time.monotonic() - t0)
+    if on_line:
+        for line in output.splitlines():
+            await on_line(line)
+    return exit_code, output
 
 
 # ── Downloads ─────────────────────────────────────────────────────────────────
-
-async def _fetch_license(asin: str) -> Optional[bytes]:
-    """Fetch a per-book DRM license from Audible via get-license.
-
-    Required when AccountsSettings.json has DecryptKey=null (account was never
-    activated with local activation bytes). The JSON output is piped to
-    liberate via -l -.
-    """
-    logger = get_logger()
-    t0 = time.monotonic()
-    try:
-        lproc = await asyncio.create_subprocess_exec(
-            *_cmd("get-license", asin),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_env(),
-        )
-        lic_stdout, lic_stderr = await asyncio.wait_for(lproc.communicate(), timeout=60)
-        log_cli(f"get-license {asin}", lproc.returncode, lic_stderr.decode(), time.monotonic() - t0)
-        if lproc.returncode == 0 and lic_stdout.strip():
-            return lic_stdout
-    except Exception as exc:
-        logger.error("[get-license] %s failed: %s", asin, exc)
-    return None
-
 
 async def run_liberate(
     book_ids: Optional[list[str]] = None,
@@ -290,48 +244,73 @@ async def run_liberate(
     logger.info("[liberate] Starting liberate for %s", ids_label)
     t0 = time.monotonic()
 
-    extra: list[str] = []
-    if force:
-        extra.append("--force")
-    if book_ids:
-        for bid in book_ids:
-            extra += ["--id", bid]
+    async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+        if not book_ids:
+            # Bulk: fire and forget via /download-all
+            resp = await client.post(_bridge("/download-all"))
+            if resp.status_code not in (200, 202, 409):
+                body = resp.json() if "json" in resp.headers.get("content-type", "") else {}
+                raise RuntimeError(body.get("error") or resp.text)
+            log_cli("bridge/liberate all", 0, "started", time.monotonic() - t0)
+            return 0, "Bulk download started"
 
-    # Fetch a per-book license to handle accounts where DecryptKey is null
-    license_bytes: Optional[bytes] = None
-    if book_ids and len(book_ids) == 1:
-        license_bytes = await _fetch_license(book_ids[0])
+        # Start download(s) — 409 means already running, which is fine
+        for asin in book_ids:
+            resp = await client.post(_bridge(f"/download/{asin}"))
+            if resp.status_code not in (200, 202, 409):
+                body = resp.json() if "json" in resp.headers.get("content-type", "") else {}
+                raise RuntimeError(body.get("error") or resp.text)
 
-    lib_cmd = _cmd("liberate", *extra)
-    if license_bytes is not None:
-        lib_cmd = _cmd("liberate", *extra, "-l", "-")
+        if len(book_ids) == 1:
+            # Single book: poll /progress/{asin} until complete
+            asin = book_ids[0]
+            last_pct = 0
+            while True:
+                await asyncio.sleep(_PROGRESS_INTERVAL)
+                prog_resp = await client.get(_bridge(f"/progress/{asin}"))
+                if prog_resp.status_code == 404:
+                    # Should not happen; treat as error
+                    return 1, "Progress record disappeared"
+                prog = prog_resp.json()
+                pct: int = prog.get("progress", 0)
+                status: str = prog.get("status", "running")
+                output: str = prog.get("output", "")
 
-    proc = await asyncio.create_subprocess_exec(
-        *lib_cmd,
-        stdin=asyncio.subprocess.PIPE if license_bytes else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env=_env(),
-    )
+                if on_progress and pct != last_pct:
+                    await on_progress(pct, output)
+                    last_pct = pct
 
-    if license_bytes and proc.stdin:
-        proc.stdin.write(license_bytes)
-        proc.stdin.close()
+                if status in ("complete", "error"):
+                    exit_code = 0 if status == "complete" else 1
+                    if exit_code == 0 and on_progress and last_pct < 100:
+                        await on_progress(100, output)
+                    log_cli(f"bridge/liberate {asin}", exit_code, output, time.monotonic() - t0)
+                    return exit_code, output
 
-    lines: list[str] = []
-    async for raw in proc.stdout:
-        text = raw.decode().rstrip()
-        lines.append(text)
-        if on_progress:
-            if re.search(r"DownloadDecryptBook Begin", text):
-                await on_progress(5, text)
-            elif re.search(r"DownloadDecryptBook Completed", text):
-                await on_progress(95, text)
-            else:
-                m = re.search(r"(\d+)\s*%", text)
-                if m:
-                    await on_progress(int(m.group(1)), text)
-    await proc.wait()
-    output = "\n".join(lines)
-    log_cli(f"liberate {ids_label}", proc.returncode, output, time.monotonic() - t0)
-    return proc.returncode, output
+        else:
+            # Multiple books: poll all until none are still running
+            remaining = set(book_ids)
+            while remaining:
+                await asyncio.sleep(_PROGRESS_INTERVAL)
+                done: set[str] = set()
+                for asin in remaining:
+                    pg = await client.get(_bridge(f"/progress/{asin}"))
+                    if pg.status_code == 200 and pg.json().get("status") in ("complete", "error"):
+                        done.add(asin)
+                remaining -= done
+
+            exit_code = 0
+            output_parts: list[str] = []
+            for asin in book_ids:
+                pg = await client.get(_bridge(f"/progress/{asin}"))
+                if pg.status_code == 200:
+                    d = pg.json()
+                    if d.get("status") == "error":
+                        exit_code = 1
+                    if d.get("output"):
+                        output_parts.append(d["output"])
+            output = "\n".join(output_parts)
+            log_cli(f"bridge/liberate {ids_label}", exit_code, output, time.monotonic() - t0)
+            return exit_code, output
+
+    return 0, ""  # unreachable

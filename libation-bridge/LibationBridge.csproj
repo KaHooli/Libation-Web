@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>LibationBridge</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Private=false: DLLs are NOT copied into publish output.
+      They live at /usr/lib/libation/ on the runtime image (installed by the .deb).
+      The AssemblyResolve hook in Program.cs loads them at runtime from that path.
+    -->
+    <Reference Include="AppScaffolding">
+      <HintPath>/usr/lib/libation/AppScaffolding.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="FileLiberator">
+      <HintPath>/usr/lib/libation/FileLiberator.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ApplicationServices">
+      <HintPath>/usr/lib/libation/ApplicationServices.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="DataLayer">
+      <HintPath>/usr/lib/libation/DataLayer.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="DataLayer.Sqlite">
+      <HintPath>/usr/lib/libation/DataLayer.Sqlite.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AudibleApi">
+      <HintPath>/usr/lib/libation/AudibleApi.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AudibleApi.Common">
+      <HintPath>/usr/lib/libation/AudibleApi.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="LibationFileManager">
+      <HintPath>/usr/lib/libation/LibationFileManager.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Dinah.Core">
+      <HintPath>/usr/lib/libation/Dinah.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
