@@ -35,11 +35,20 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 - **Session persistence**: On page load, silently calls `/api/auth/refresh` using the cookie
 - **Auto-refresh**: Timer in `AuthContext` refreshes access token 2 min before expiry
 
+### Auth API endpoints (`backend/app/api/auth.py`)
+- `GET /api/auth/default-credentials` — returns `{"using_default_credentials": bool}`; compares logged-in user's username against `ADMIN_USERNAME` env var and verifies stored hash still matches `ADMIN_PASSWORD`. Used by Settings page to show the amber warning banner.
+- `PATCH /api/auth/me` — free-form dict body; updates `audible_account_id` and/or `owner_name` on the logged-in user
+- `POST /api/auth/change-username` — body: `{new_username, current_password}`; validates ≥3 chars, 409 on conflict; returns updated `UserResponse`
+- `POST /api/auth/change-password` — body: `{current_password, new_password}`; revokes all sessions on success
+- `GET /api/auth/sessions` / `DELETE /api/auth/sessions/{id}` / `DELETE /api/auth/sessions` — session management for the logged-in user
+
 ## Database (SQLite at `/data/app.db`)
 - `users`: id, username, hashed_password (bcrypt), totp_secret, totp_enabled, is_active, is_admin, permissions (JSON), download_cap (INTEGER), audible_account_id (TEXT), owner_name (TEXT), created_at
 - `sessions`: id, user_id, refresh_token_hash (sha256), expires_at, created_at, last_used_at, ip_address, user_agent
 - `downloads`: id, book_id, book_title, user_id, status, progress, started_at, completed_at, error_message, created_at
 - `scans`: id, status, started_at, completed_at, books_added, output, error_message
+- `audible_account_settings`: account_id (TEXT PK), added_by_user_id (INTEGER), auto_download (INTEGER DEFAULT 0) — created via `_migrate_db`; tracks which web UI user added each Audible account and whether auto-download is enabled
+- `system_settings`: key (TEXT PK), value (TEXT DEFAULT '') — created via `_migrate_db`; currently holds one row: `last_auto_download_at` (ISO timestamp of the last auto-download run, empty string when never run)
 
 ## Permissions system
 - `DEFAULT_PERMISSIONS` in `models/user.py`: all flags `true` except `can_remove_downloads = false`
@@ -72,6 +81,8 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 ## Default credentials
 Set via env vars `ADMIN_USERNAME` / `ADMIN_PASSWORD` (defaults: `admin` / `admin`).
 Admin user is seeded on first startup if no users exist. `_seed_admin` uses raw SQL via `conn.execute()` (same as `_migrate_db`) rather than ORM — avoids the issue where `_migrate_db` calling `db.connection()` leaves a dangling DBAPI transaction that causes subsequent `db.add(User(...))` commits to silently not persist.
+
+`GET /api/auth/default-credentials` detects whether the logged-in user is still on factory defaults by comparing their username/password against the env vars at runtime. When `using_default_credentials` is `true`, SettingsPage shows an amber warning banner and surfaces `UpdateCredentialsSection` — a single form that changes username + password together and signs the user out immediately after.
 
 ## Development
 ```bash
@@ -123,11 +134,19 @@ docker compose up --build
 - InProgress directories land in `/tmp/Libation-{username}` (WinTemp default). Both `/tmp/Libation-root/` and `/tmp/Libation-libation/` may exist depending on which user ran the CLI.
 - `DownloadDecryptBook.ProcessAsync` fires `OnCompleted` in a `finally` block, so "DownloadDecryptBook Completed" always appears in output even when an exception propagated — "Error processing book" follows immediately after from the outer `catch`.
 
+## Accounts (`backend/app/api/accounts.py`)
+- `GET /api/accounts` — lists Audible accounts from bridge, enriched with `owner_name`, `owner_username` (from `users` table), `auto_download`, and `added_by_user_id` (from `audible_account_settings`)
+- `POST /api/accounts/login/start` / `POST /api/accounts/login/complete` — OAuth login flow via PTY subprocess; on `complete`, inserts a row into `audible_account_settings` marking which web UI user added the account
+- `PATCH /api/accounts/{account_id}/auto-download` — body: `{auto_download: bool}`; updates `audible_account_settings.auto_download`; only callable by admin or the user who added that account (`added_by_user_id`)
+- `DELETE /api/accounts/{account_id}` — removes account from `AccountsSettings.json`
+- **Auto-scan after OAuth**: `AccountsPage.tsx` fires `POST /api/downloads/scan` silently in the background immediately after `login/complete` succeeds, then shows an info banner linking to `/liberate`
+
 ## Downloads & Scan (`backend/app/api/downloads.py`)
 - `POST /api/downloads/scan` creates a `Scan` row, fires `asyncio.create_task` to call `cli.run_scan()` → bridge `POST /scan`
 - `POST /api/downloads` creates a `Download` row with `user_id`, fires task to call `cli.run_liberate(asin)` → bridge `POST /download/{asin}` + poll `GET /progress/{asin}`
 - Background tasks update DB rows as progress changes; frontend polls `/api/downloads` every 2s
 - Duplicate active downloads blocked with 409
+- **Auto-download after scan** (`_auto_download_if_enabled`): called via `asyncio.create_task` after every successful scan. Reads `audible_account_settings` for accounts with `auto_download=1`; enforces a 30-minute global cooldown via `system_settings.last_auto_download_at`; for each opted-in account fetches `not_liberated` book IDs and queues them as individual downloads under the admin user, skipping any already active.
 
 ## User management (`backend/app/api/users.py`)
 - Admin-only routes behind `require_admin` dependency
@@ -139,6 +158,12 @@ docker compose up --build
 - `GET/PUT /api/settings/libation` — reads/writes `/config/appsettings.json` (resilient: merges only known keys)
 - `GET /api/settings/stats` — total_books (LibationContext.db), total_downloads (our DB), accounts_count (bridge `/accounts`), downloads_per_user (JOIN)
 - Field map: Python snake_case ↔ Libation PascalCase key names
+
+## Logs API (`backend/app/api/logs.py`)
+- `GET /api/logs?lines=200&level=all` — admin-only; reads `/config/logs/libation-web.log`, filters lines by `[LEVEL]` substring match, returns `{"lines": [...], "total": int, "truncated": bool}`; max 2000 lines per request
+- `GET /api/logs/download` — admin-only; serves the full log file as `text/plain` download (`libation-web.log`)
+- **LogsSection in Settings**: dark monospace terminal viewer (h-96), level filter tabs (ALL / INFO / WARN / ERROR / DEBUG), line count selector (100/200/500/1000), manual Refresh button, Auto-refresh toggle (polls every 5s), Download button; admin-only, shown at the bottom of SettingsPage
+- **ApiDocsSection in Settings**: two links to FastAPI's built-in `/docs` (Swagger UI) and `/redoc`; admin-only, below LogsSection
 
 ## Logging (`backend/app/services/logger.py`)
 - Writes to `/config/logs/libation-web.log` (on the mapped `/config` volume — survives container restarts)
@@ -184,6 +209,47 @@ docker compose up --build
 - **Phase 5 Extended** (complete): User Management gains inline `owner_name` field and Audible Account dropdown (sets `users.audible_account_id`). Liberate page gains owner filter tabs, centered search bar (300ms debounce), per-book Mark Downloaded/Not Downloaded (`PATCH /api/liberate/books/{book_id}`), Multi Select mode with Select All spanning all pages (via `GET /api/liberate/book-ids`) plus bulk mark actions, and per-page selector [24/48/96/200]. Accounts page shows post-login "go to Downloads → Scan Library" info banner. Liberate moved to top of sidebar and set as default view (`/` redirects to `/liberate`). Library and My Books removed from sidebar nav and routes entirely (pages still exist in codebase but are not linked).
 - **Phase 7 seed fix** (complete): `_seed_admin` in `main.py` rewritten to use raw SQL (`conn.execute()`) instead of ORM (`db.add(User(...))`). Root cause: `_migrate_db` calls `db.connection()` which acquires a DBAPI connection and begins a transaction; if no migrations run, no `db.commit()` is called, leaving the session with a dangling connection. The subsequent ORM `db.commit()` in the old `_seed_admin` did not reliably persist the row. The raw SQL approach shares the same connection path as `_migrate_db` and works correctly. Also added try/except with explicit logger.error logging and flush=True on print so failures are never silent.
 - **Phase 7** (complete): LibationBridge ASP.NET Core 10 sidecar replaces subprocess calls for downloads and scans. New `libation-bridge/` directory with `LibationBridge.csproj` and `Program.cs`. Bridge references Libation DLLs at `/usr/lib/libation/` directly via `AssemblyResolve` hook + `[MethodImpl(NoInlining)]` isolation. Real `StreamingProgressChanged` events (0–100%) replace fake 5/95 progress jumps from stdout parsing. Dockerfile gains a `bridge-builder` stage (Stage 2) that installs the Libation `.deb` for compile-time DLL resolution then publishes a self-contained single-file binary. Entrypoint pre-seeds `/config/Libation/appsettings.json` with `{"LibationFiles":"/config"}` so the bridge's Libation scaffolding uses the same config path as `libationcli`. `cli.py` rewritten to route downloads and scans through bridge HTTP; login stays PTY subprocess. `BRIDGE_URL` added to `config.py`.
+- **Phase 8** (complete): Operational hardening — auto-download, default-credentials UX, log viewer, and sidebar polish. Per-Audible-account auto-download toggle stored in new `audible_account_settings` table; `_auto_download_if_enabled()` fires after every successful scan with a 30-min global cooldown via `system_settings`. OAuth flow auto-triggers a library scan and shows a dismissable info banner on completion. `GET /api/auth/default-credentials` detects factory-default credentials; SettingsPage shows amber warning banner + `UpdateCredentialsSection` (change username + password in one step, then signs out). `POST /api/auth/change-username` added. Logs API (`GET /api/logs`, `GET /api/logs/download`) + `LogsSection` embedded in Settings (level filter, line count, auto-refresh, download). `ApiDocsSection` in Settings links to `/docs` and `/redoc`. Sidebar nav renamed "Accounts" → "Audible Accounts". `UserAdminResponse.created_at` made Optional to handle NULL rows from early-seeded users. `AccountResponse` gains `auto_download` and `added_by_user_id` fields.
+
+## Pre-push sanitization (REQUIRED before any `git push`)
+
+Before pushing to GitHub, the working tree must be fully sanitized. The container
+should be in a clean "factory default" state — only the default `admin/admin`
+credentials remain, no real Audible accounts, no real library data, no downloads.
+
+### Files/directories to delete
+
+| Path (host) | Reason |
+|-------------|--------|
+| `./config/AccountsSettings.json` | Real Audible OAuth tokens |
+| `./config/LibationContext.db` | Real library data tied to a real Audible account |
+| `./config/SearchEngine/` | Lucene index built from real library |
+| `./config/logs/` | Log files that may contain real email addresses |
+| `./data/app.db` | Real user accounts and sessions; container recreates it with default `admin/admin` on next start |
+| `./audiobooks/` (contents) | Downloaded audiobook files — purge all content, keep the directory |
+
+### Inside the running container (ephemeral, non-volume)
+
+| Path (container) | Reason |
+|-----------------|--------|
+| `/tmp/Libation-*/` | In-progress download staging directories |
+
+### Files to keep / verify
+
+| Path | Expected content |
+|------|-----------------|
+| `./config/Settings.json` | Only `{"Books": "/audiobooks"}` — no credentials |
+| `./config/appsettings.json` | Libation download toggles only — no credentials |
+| `./config/Libation/appsettings.json` | Only `{"LibationFiles":"/config"}` — recreated by entrypoint anyway |
+| `docker-compose.yml` | `SECRET_KEY` must still be the placeholder `change-me-use-a-long-random-string`; `ADMIN_USERNAME`/`ADMIN_PASSWORD` must be `admin`/`admin` |
+
+### Post-purge verification
+
+After deleting the above, restart the container (`docker compose up`). On startup:
+- `_seed_admin` recreates `app.db` with only the default `admin/admin` user
+- No Audible accounts are connected
+- The Liberate page shows "no accounts" empty state
+- `/audiobooks/` directory exists but is empty
 
 ## Conventions
 - API routes: `/api/<resource>/<action>`
