@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   ShieldCheck, ShieldOff, KeyRound, Loader2, Users, MonitorSmartphone,
   Sliders, Trash2, Plus, RefreshCw, Crown, BookOpen, ShieldAlert,
-  Info, CheckCircle, ArrowUpCircle, RotateCcw, ScrollText, Download,
+  Info, ScrollText, Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
@@ -851,101 +851,18 @@ function UserManagementSection() {
   );
 }
 
-// ── About / Update Section ───────────────────────────────────────────────────
-
-interface UpdateStatus {
-  installed_version: string | null;
-  latest_version: string | null;
-  up_to_date: boolean | null;
-  asset_found?: boolean;
-  published_at?: string | null;
-  release_notes_url?: string | null;
-  has_rollback?: boolean;
-  error?: string;
-}
+// ── About Section ────────────────────────────────────────────────────────────
 
 function AboutSection() {
-  const { user } = useAuth();
-  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [cliVersion, setCliVersion] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [checking, setChecking] = useState(false);
-  const [installing, setInstalling] = useState(false);
-  const [restarting, setRestarting] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
 
-  const fetchStatus = async () => {
-    setLoading(true);
-    try {
-      const { data } = await api.get("/updates/status");
-      setStatus(data);
-    } catch { setError("Could not fetch version info."); }
-    finally { setLoading(false); }
-  };
-
-  const checkNow = async () => {
-    setChecking(true); setError(""); setMessage("");
-    try {
-      const { data } = await api.post("/updates/check");
-      setStatus(data);
-    } catch { setError("Could not reach GitHub."); }
-    finally { setChecking(false); }
-  };
-
-  const pollUntilReady = async () => {
-    // Give uvicorn time to shut down
-    await new Promise(r => setTimeout(r, 3000));
-    for (let i = 0; i < 60; i++) {
-      await new Promise(r => setTimeout(r, 2000));
-      try {
-        const res = await fetch("/api/health");
-        if (res.ok) {
-          setRestarting(false);
-          setInstalling(false);
-          setMessage("Done! CLI updated successfully.");
-          await fetchStatus();
-          return;
-        }
-      } catch { /* still restarting */ }
-    }
-    setRestarting(false);
-    setInstalling(false);
-    setError("Server did not come back in time — please refresh the page.");
-  };
-
-  const install = async () => {
-    setInstalling(true); setError(""); setMessage("");
-    try {
-      const { data } = await api.post("/updates/install");
-      setMessage(data.message);
-      setRestarting(true);
-      await pollUntilReady();
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(detail ?? "Update failed.");
-      setInstalling(false);
-    }
-  };
-
-  const rollback = async () => {
-    if (!confirm("Roll back to the previous CLI version?")) return;
-    setInstalling(true); setError(""); setMessage("");
-    try {
-      const { data } = await api.post("/updates/rollback");
-      setMessage(data.message);
-      setRestarting(true);
-      await pollUntilReady();
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(detail ?? "Rollback failed.");
-      setInstalling(false);
-    }
-  };
-
-  useEffect(() => { fetchStatus(); }, []);
-
-  const fmtDate = (iso: string | null | undefined) =>
-    iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : null;
+  useEffect(() => {
+    api.get("/updates/version")
+      .then(({ data }) => setCliVersion(data.cli_version))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
     <Card>
@@ -954,97 +871,23 @@ function AboutSection() {
           <Info className="h-5 w-5 text-brand-600" />
           About
         </CardTitle>
-        <CardDescription>LibationCLI version and update management.</CardDescription>
+        <CardDescription>LibationCLI version information.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {error && <Alert variant="error">{error}</Alert>}
-        {message && !restarting && <Alert variant="success">{message}</Alert>}
-
-        {restarting && (
-          <div className="flex items-center gap-3 rounded-xl border border-brand-200 bg-brand-50 dark:border-brand-800 dark:bg-brand-950/30 px-4 py-3 text-sm text-brand-700 dark:text-brand-300">
-            <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-            Server restarting — please wait…
+      <CardContent>
+        <dl className="text-sm">
+          <div className="flex items-center justify-between py-2.5">
+            <dt className="text-slate-500 dark:text-slate-400">Installed CLI version</dt>
+            <dd className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+              {loading
+                ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                : cliVersion ? `v${cliVersion}` : "Unknown"}
+            </dd>
           </div>
-        )}
-
-        {loading ? (
-          <div className="flex justify-center py-4">
-            <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
-          </div>
-        ) : (
-          <dl className="text-sm divide-y divide-slate-100 dark:divide-slate-700">
-            <div className="flex items-center justify-between py-2.5">
-              <dt className="text-slate-500 dark:text-slate-400">Installed CLI version</dt>
-              <dd className="font-mono font-semibold text-slate-800 dark:text-slate-200">
-                {status?.installed_version ? `v${status.installed_version}` : "Unknown"}
-              </dd>
-            </div>
-            <div className="flex items-center justify-between py-2.5">
-              <dt className="text-slate-500 dark:text-slate-400">Latest available</dt>
-              <dd className="font-mono font-semibold text-slate-800 dark:text-slate-200">
-                {status?.error
-                  ? <span className="text-xs text-slate-400 font-normal">Unavailable</span>
-                  : status?.latest_version ? `v${status.latest_version}` : "—"}
-              </dd>
-            </div>
-            {status?.published_at && (
-              <div className="flex items-center justify-between py-2.5">
-                <dt className="text-slate-500 dark:text-slate-400">Latest released</dt>
-                <dd className="text-slate-700 dark:text-slate-300">{fmtDate(status.published_at)}</dd>
-              </div>
-            )}
-            <div className="flex items-center justify-between py-2.5">
-              <dt className="text-slate-500 dark:text-slate-400">Status</dt>
-              <dd>
-                {status?.up_to_date === true && (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-600 dark:text-green-400">
-                    <CheckCircle className="h-3.5 w-3.5" /> Up to date
-                  </span>
-                )}
-                {status?.up_to_date === false && (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
-                    <ArrowUpCircle className="h-3.5 w-3.5" /> Update available
-                  </span>
-                )}
-                {status?.up_to_date === null && (
-                  <span className="text-xs text-slate-400">Unable to check</span>
-                )}
-              </dd>
-            </div>
-          </dl>
-        )}
-
-        {/* Admin-only controls */}
-        {user?.is_admin && !loading && (
-          <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100 dark:border-slate-700">
-            <Button variant="outline" size="sm" onClick={checkNow}
-              loading={checking} disabled={installing || restarting}>
-              <RefreshCw className="h-3.5 w-3.5" /> Check for updates
-            </Button>
-
-            {status?.up_to_date === false && status.asset_found && (
-              <Button size="sm" onClick={install}
-                loading={installing} disabled={restarting}>
-                <ArrowUpCircle className="h-3.5 w-3.5" />
-                Update to v{status.latest_version}
-              </Button>
-            )}
-
-            {status?.has_rollback && (
-              <Button variant="outline" size="sm" onClick={rollback}
-                disabled={installing || restarting}>
-                <RotateCcw className="h-3.5 w-3.5" /> Roll back
-              </Button>
-            )}
-
-            {status?.release_notes_url && (
-              <a href={status.release_notes_url} target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
-                Release notes ↗
-              </a>
-            )}
-          </div>
-        )}
+        </dl>
+        <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">
+          To update LibationCLI, rebuild the Docker image with a newer{" "}
+          <code className="font-mono">LIBATION_VERSION</code>.
+        </p>
       </CardContent>
     </Card>
   );

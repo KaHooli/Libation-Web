@@ -151,29 +151,29 @@
 
 ---
 
-## Phase 6 — CLI Self-Update ✅
+## Phase 6 — CLI Self-Update ~~✅~~ (removed — architecturally incompatible with LibationBridge)
 
-### Entrypoint restart loop ✅
+> **Why removed:** Installing a new Libation `.deb` via `dpkg -i` replaces all DLLs in `/usr/lib/libation/` but leaves the LibationBridge binary unchanged. The bridge is a compiled binary built against a specific Libation version's type signatures; after a `.deb` swap it loads mismatched DLLs and fails at runtime with `MissingMethodException` or dies before `/health` responds (killing the container). The correct upgrade path is to bump `LIBATION_VERSION` in the Dockerfile and rebuild the image — the `bridge-builder` stage recompiles the bridge against the new DLLs automatically.
+>
+> **What was kept:** The `while true` restart loop in `docker-entrypoint.sh` (needed for crash recovery). The Settings page **About** card (read-only, shows installed CLI version via `GET /api/updates/version`).
+>
+> **Cleanup note for existing users:** If you previously used the update feature, you may have `.deb` files in `./config/updates/` (up to ~200 MB each). That directory is no longer used and can be deleted to reclaim disk space.
+
+### Entrypoint restart loop ✅ (kept — crash recovery only)
 - [x] `docker-entrypoint.sh` replaced `exec gosu uvicorn` with a `while true` restart loop
-- [x] On each loop iteration: installs `/config/updates/pending` `.deb` as root via `dpkg -i` before starting uvicorn
-- [x] Previous `.deb` saved to `/config/updates/rollback` before each update (enables one-step rollback)
-- [x] Restart path: Python writes `/tmp/libation-restart` sentinel → SIGTERMs uvicorn → loop installs update → restarts
-- [x] Crash path (no sentinel): 5-second delay before restart to avoid tight loop
+- [x] Crash path: 5-second delay before restarting both bridge and uvicorn to avoid tight loop
 - [x] `SIGTERM` to container exits cleanly (no zombie processes)
+- ~~[x] On each loop iteration: installs `/config/updates/pending` `.deb` as root via `dpkg -i`~~ (removed)
+- ~~[x] Restart sentinel `/tmp/libation-restart` for planned restarts vs crash restarts~~ (removed)
 
-### Update service ✅
-- [x] `GET /api/updates/status` — installed version (from `libationcli --version`), latest GitHub release, up-to-date flag, rollback availability
-- [x] `POST /api/updates/check` — force-refresh GitHub API cache
-- [x] `POST /api/updates/install` — admin only; downloads `linux-chardonnay-{arch}.deb` from GitHub to `/config/updates/`, stages pending file, triggers restart
-- [x] `POST /api/updates/rollback` — admin only; re-stages previous `.deb` and triggers restart
-- [x] GitHub Releases API (`rmcrackan/Libation`) cached in-process for 1 hour
-- [x] Architecture auto-detected (`amd64` / `arm64`) via `platform.machine()`
-- [x] `httpx` used for async GitHub API calls and streamed `.deb` download
+### Update service (removed)
+- ~~`GET /api/updates/status`, `POST /api/updates/check`, `POST /api/updates/install`, `POST /api/updates/rollback`~~ (removed)
+- ~~`backend/app/services/update.py`~~ (deleted)
+- `GET /api/updates/version` ✅ — read-only; returns installed CLI version from `libationcli --version`
 
-### Settings — About section ✅
-- [x] Visible to all users: installed CLI version, latest available version, release date, up-to-date status badge
-- [x] Admin-only controls: **Check for updates**, **Update to vX.X.X**, **Roll back**, **Release notes** link
-- [x] While restarting: branded reconnecting banner; frontend polls `/api/health` and auto-refreshes when server returns
+### Settings — About section ✅ (simplified)
+- [x] Read-only card visible to all users: installed CLI version
+- ~~[x] Admin-only update/rollback controls~~ (removed)
 
 ---
 

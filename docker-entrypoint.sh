@@ -3,29 +3,6 @@ set -e
 
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
-RESTART_SENTINEL="/tmp/libation-restart"
-UPDATES_DIR="/config/updates"
-
-# ── Install any pending CLI update (runs as root before privilege drop) ───────
-install_pending_update() {
-    [ -f "$UPDATES_DIR/pending" ] || return 0
-    PENDING_DEB=$(cat "$UPDATES_DIR/pending")
-    DEB_PATH="$UPDATES_DIR/$PENDING_DEB"
-    if [ -f "$DEB_PATH" ]; then
-        echo "[Libation] Installing pending update: $PENDING_DEB"
-        if dpkg -i "$DEB_PATH"; then
-            echo "[Libation] Update installed: $PENDING_DEB"
-            rm -f "$UPDATES_DIR/pending"
-            echo "$PENDING_DEB" > "$UPDATES_DIR/current"
-        else
-            echo "[Libation] Update failed — removing pending flag, keeping old binary"
-            rm -f "$UPDATES_DIR/pending"
-        fi
-    else
-        echo "[Libation] Pending deb not found: $DEB_PATH — skipping"
-        rm -f "$UPDATES_DIR/pending"
-    fi
-}
 
 # ── Wait for LibationBridge /health to respond ────────────────────────────────
 wait_for_bridge() {
@@ -89,8 +66,6 @@ cleanup() {
 trap cleanup SIGTERM SIGINT
 
 while true; do
-    install_pending_update
-
     # ── Bootstrap LibationBridge config dir ──────────────────────────────────
     # Libation reads {CWD}/Libation/appsettings.json to discover its files dir.
     # Bridge CWD is /config (set via Directory.SetCurrentDirectory in Program.cs),
@@ -136,12 +111,6 @@ while true; do
         exit 0
     fi
 
-    if [ -f "$RESTART_SENTINEL" ]; then
-        rm -f "$RESTART_SENTINEL"
-        echo "[Libation] Restarting for update..."
-        sleep 1
-    else
-        echo "[Libation] uvicorn exited (code $EXIT_CODE) — restarting in 5s..."
-        sleep 5
-    fi
+    echo "[Libation] uvicorn exited (code $EXIT_CODE) — restarting in 5s..."
+    sleep 5
 done

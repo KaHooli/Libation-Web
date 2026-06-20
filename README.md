@@ -20,7 +20,6 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 - **Multi-user support** — admin can create/disable/delete users; per-user permission flags and 12-hour rolling download caps
 - **User management** — set owner name and link each user to an Audible account
 - **Settings** — Libation config passthrough, session management (list/revoke), 2FA setup, API docs
-- **CLI self-update** — admin can update LibationCLI to the latest version from within the UI; no Docker rebuild needed. Entrypoint restart loop installs the new `.deb` as root then brings the server back automatically. Rollback to previous version supported.
 - **Auth** — JWT access tokens (15-min) + 60-day httpOnly refresh cookies, optional TOTP 2FA
 - **Dark mode** — persisted to localStorage, toggled from the sidebar
 - **Unraid-ready** — PUID/PGID support, Community Applications template included
