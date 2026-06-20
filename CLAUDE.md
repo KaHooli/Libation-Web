@@ -245,11 +245,13 @@ credentials remain, no real Audible accounts, no real library data, no downloads
 
 ### Post-purge verification
 
-After deleting the above, restart the container (`docker compose up`). On startup:
+After deleting the above, restart the container (`docker compose restart`). On startup:
 - `_seed_admin` recreates `app.db` with only the default `admin/admin` user
 - No Audible accounts are connected
 - The Liberate page shows "no accounts" empty state
 - `/audiobooks/` directory exists but is empty
+
+> **Important:** Always do a final `docker compose restart` after sanitizing, even if the container was already restarted mid-process. Deleting `app.db` while the container is live causes a disk I/O error on the stale file handle; the entrypoint restart loop recovers and re-seeds the DB, but a subsequent sanitization pass will delete that freshly-seeded file too — leaving the container running with no database and login broken. The final restart ensures `app.db` is cleanly re-created after all deletions are complete.
 
 ## Conventions
 - API routes: `/api/<resource>/<action>`
