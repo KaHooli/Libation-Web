@@ -252,6 +252,74 @@ function ChangePasswordSection() {
   );
 }
 
+// ── Update Credentials Section (default-credential users only) ───────────────
+
+function UpdateCredentialsSection() {
+  const { logout } = useAuth();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (username.trim().length < 3) { setError("New username must be at least 3 characters."); return; }
+    if (password.length < 8) { setError("New password must be at least 8 characters."); return; }
+    if (password !== confirmPassword) { setError("Passwords do not match."); return; }
+    if (!currentPassword) { setError("Current password is required."); return; }
+    setLoading(true);
+    try {
+      await authApi.changeUsername(username.trim(), currentPassword);
+      await authApi.changePassword(currentPassword, password);
+      await logout();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail ?? "Failed to update credentials.";
+      setError(msg);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card className="border-amber-200 dark:border-amber-800">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <KeyRound className="h-5 w-5 text-amber-500" />
+          Update credentials
+        </CardTitle>
+        <CardDescription>
+          Change your username and password together in one step. You will be signed out when done.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4 max-w-sm">
+          {error && <Alert variant="error">{error}</Alert>}
+          <div>
+            <Label htmlFor="uc-username">New username</Label>
+            <Input id="uc-username" value={username} onChange={e => setUsername(e.target.value)} required minLength={3} placeholder="Choose a username" />
+          </div>
+          <div>
+            <Label htmlFor="uc-password">New password</Label>
+            <Input id="uc-password" type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={8} placeholder="At least 8 characters" />
+          </div>
+          <div>
+            <Label htmlFor="uc-confirm">Confirm new password</Label>
+            <Input id="uc-confirm" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required />
+          </div>
+          <div>
+            <Label htmlFor="uc-current">Current password</Label>
+            <Input id="uc-current" type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required placeholder="admin" />
+          </div>
+          <Button type="submit" loading={loading}>Update &amp; sign out</Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Session Management Section ───────────────────────────────────────────────
 
 interface SessionItem {
@@ -1074,9 +1142,25 @@ function ApiDocsSection() {
 
 export function SettingsPage() {
   const { user } = useAuth();
+  const [usingDefaults, setUsingDefaults] = useState(false);
+
+  useEffect(() => {
+    api.get("/auth/default-credentials")
+      .then(({ data }) => setUsingDefaults(data.using_default_credentials))
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="max-w-2xl space-y-6">
+      {usingDefaults && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-4 py-3">
+          <ShieldAlert className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            You're using default credentials — use the <strong className="font-semibold">Update Credentials</strong> section directly below to set a new username and password in one step.
+          </p>
+        </div>
+      )}
+      {usingDefaults && <UpdateCredentialsSection />}
       {user?.is_admin && <LibationSettingsSection />}
       {user?.is_admin && <UserManagementSection />}
       {user?.is_admin && <UserPermissionsSection />}

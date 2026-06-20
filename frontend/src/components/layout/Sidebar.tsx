@@ -10,7 +10,7 @@ import { NavLink } from "react-router-dom";
 const NAV = [
   { to: "/liberate", label: "Liberate", icon: Unlock },
   { to: "/downloads", label: "Downloads", icon: Download },
-  { to: "/accounts", label: "Accounts", icon: Users },
+  { to: "/accounts", label: "Audible Accounts", icon: Users },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

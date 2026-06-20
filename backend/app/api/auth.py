@@ -134,6 +134,15 @@ def me(current_user=Depends(get_current_user)):
     return UserResponse.model_validate(current_user)
 
 
+@router.get("/default-credentials")
+def default_credentials(current_user=Depends(get_current_user)):
+    is_default = (
+        current_user.username == settings.ADMIN_USERNAME
+        and auth_svc.verify_password(settings.ADMIN_PASSWORD, current_user.hashed_password)
+    )
+    return {"using_default_credentials": is_default}
+
+
 @router.patch("/me", response_model=UserResponse)
 def update_me(
     body: dict,

@@ -5,6 +5,7 @@ import {
   Copy, ChevronRight, Loader2, Globe, AlertCircle, Trash2, User, Info, X,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 
 interface Account {
@@ -15,6 +16,8 @@ interface Account {
   authenticated: boolean;
   owner_name: string | null;
   owner_username: string | null;
+  auto_download: boolean;
+  added_by_user_id: number | null;
 }
 
 type Step = "idle" | "form" | "url" | "completing" | "done";
@@ -42,7 +45,26 @@ function LocaleBadge({ locale }: { locale: string }) {
   );
 }
 
+function StatusTooltip({ authenticated }: { authenticated: boolean }) {
+  return (
+    <div className="relative group inline-flex shrink-0">
+      {authenticated ? (
+        <CheckCircle className="h-4 w-4 text-green-500 cursor-default" />
+      ) : (
+        <AlertCircle className="h-4 w-4 text-amber-400 cursor-default" />
+      )}
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:block z-10 pointer-events-none">
+        <span className="rounded-md bg-slate-800 px-2 py-1 text-xs text-white whitespace-nowrap shadow-lg block">
+          {authenticated ? "Authenticated" : "Not authenticated — re-login required"}
+        </span>
+        <span className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800 block" />
+      </span>
+    </div>
+  );
+}
+
 export function AccountsPage() {
+  const { user } = useAuth();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState<Step>("idle");
@@ -56,6 +78,7 @@ export function AccountsPage() {
   const [copied, setCopied] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [showNextStep, setShowNextStep] = useState(false);
+  const [togglingAutoDownload, setTogglingAutoDownload] = useState<string | null>(null);
 
   const fetchAccounts = () => {
     setLoading(true);
@@ -94,6 +117,8 @@ export function AccountsPage() {
       });
       setStep("done");
       fetchAccounts();
+      // Kick off a library scan silently in the background
+      api.post("/downloads/scan").catch(() => {});
     } catch (e: any) {
       setError(e.response?.data?.detail || "Failed to complete login. Make sure you pasted the correct URL.");
     } finally {
@@ -121,6 +146,22 @@ export function AccountsPage() {
     }
   };
 
+  const toggleAutoDownload = async (accountId: string, current: boolean) => {
+    setTogglingAutoDownload(accountId);
+    try {
+      await api.patch(`/accounts/${encodeURIComponent(accountId)}/auto-download`, {
+        auto_download: !current,
+      });
+      setAccounts(prev =>
+        prev.map(a => a.account_id === accountId ? { ...a, auto_download: !current } : a)
+      );
+    } catch (e: any) {
+      alert(e.response?.data?.detail || "Failed to update auto-download.");
+    } finally {
+      setTogglingAutoDownload(null);
+    }
+  };
+
   const resetFlow = () => {
     setStep("idle");
     setEmail("");
@@ -131,20 +172,23 @@ export function AccountsPage() {
     setError("");
   };
 
+  const canToggleAutoDownload = (acc: Account) =>
+    user?.is_admin || acc.added_by_user_id === user?.id;
+
   return (
     <div className="max-w-2xl space-y-6">
-      {/* Next-step banner shown after successful account connection */}
+      {/* Post-connection banner */}
       {showNextStep && (
         <div className="flex items-start gap-3 rounded-xl border border-brand-200 bg-brand-50 dark:border-brand-800 dark:bg-brand-950/40 px-4 py-3">
           <Info className="h-4 w-4 text-brand-600 dark:text-brand-400 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-brand-800 dark:text-brand-300">Account connected — one more step!</p>
+            <p className="text-sm font-medium text-brand-800 dark:text-brand-300">Account connected!</p>
             <p className="text-xs text-brand-700 dark:text-brand-400 mt-0.5">
-              Go to{" "}
-              <Link to="/downloads" className="underline font-semibold hover:text-brand-900 dark:hover:text-brand-200">
-                Downloads
+              A library scan has been started automatically. Your audiobooks will appear on the{" "}
+              <Link to="/liberate" className="underline font-semibold hover:text-brand-900 dark:hover:text-brand-200">
+                Liberate
               </Link>
-              {" "}and click <span className="font-semibold">Scan Library</span> to import your audiobooks.
+              {" "}page once the scan completes.
             </p>
           </div>
           <button
@@ -332,7 +376,7 @@ export function AccountsPage() {
                 <CheckCircle className="h-6 w-6 text-green-500 shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-slate-800">Account connected!</p>
-                  <p className="text-xs text-slate-500">Next: scan your library to import your audiobooks.</p>
+                  <p className="text-xs text-slate-500">A library scan has been started automatically.</p>
                 </div>
                 <button
                   onClick={() => { setShowNextStep(true); resetFlow(); }}
@@ -374,11 +418,7 @@ export function AccountsPage() {
                   <p className="text-xs text-slate-500 truncate">{acc.account_id}</p>
                 </div>
                 <LocaleBadge locale={acc.locale} />
-                {acc.authenticated ? (
-                  <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
-                ) : (
-                  <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
-                )}
+                <StatusTooltip authenticated={acc.authenticated} />
                 <button
                   onClick={() => handleRemove(acc.account_id)}
                   disabled={removing === acc.account_id}
@@ -390,6 +430,8 @@ export function AccountsPage() {
                     : <Trash2 className="h-4 w-4" />}
                 </button>
               </div>
+
+              {/* Owner row */}
               <div className="mt-2 ml-[3.25rem] flex items-center gap-1.5">
                 <User className="h-3.5 w-3.5 text-slate-300 shrink-0" />
                 <span className="text-xs text-slate-400">Owner:</span>
@@ -401,6 +443,27 @@ export function AccountsPage() {
                   <span className="text-xs italic text-slate-300">Unassigned</span>
                 )}
               </div>
+
+              {/* Auto-download toggle — visible to admin or the user who added this account */}
+              {canToggleAutoDownload(acc) && (
+                <div className="mt-2 ml-[3.25rem] flex items-center gap-2">
+                  <button
+                    onClick={() => toggleAutoDownload(acc.account_id, acc.auto_download)}
+                    disabled={togglingAutoDownload === acc.account_id}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 ${
+                      acc.auto_download ? "bg-brand-600" : "bg-slate-200"
+                    }`}
+                    role="switch"
+                    aria-checked={acc.auto_download}
+                  >
+                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${acc.auto_download ? "translate-x-4" : "translate-x-0"}`} />
+                  </button>
+                  <span className="text-xs text-slate-500">Auto-download new books</span>
+                  {togglingAutoDownload === acc.account_id && (
+                    <Loader2 className="h-3 w-3 animate-spin text-slate-400" />
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

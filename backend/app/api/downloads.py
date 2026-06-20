@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user
@@ -50,6 +50,75 @@ def _enforce_cap(user, db: Session) -> None:
 
 
 # ── Background tasks ──────────────────────────────────────────────────────────
+
+async def _auto_download_if_enabled() -> None:
+    """After a successful scan, sequentially download un-liberated books for opted-in Audible accounts."""
+    from ..services import libation as libation_svc
+    from ..models.user import User as UserModel
+
+    opted_in: list[str] = []
+    admin_id: int = 1
+
+    with SessionLocal() as db:
+        try:
+            conn = db.connection()
+            row = conn.execute(text(
+                "SELECT value FROM system_settings WHERE key = 'last_auto_download_at'"
+            )).first()
+            last_str = (row[0] if row else "") or ""
+            if last_str:
+                try:
+                    last_dt = datetime.fromisoformat(last_str)
+                    if last_dt.tzinfo is None:
+                        last_dt = last_dt.replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) - last_dt < timedelta(minutes=30):
+                        return
+                except ValueError:
+                    pass
+
+            rows = conn.execute(text(
+                "SELECT account_id FROM audible_account_settings WHERE auto_download = 1"
+            )).fetchall()
+            opted_in = [r[0] for r in rows]
+            if not opted_in:
+                return
+
+            admin = db.query(UserModel).filter(UserModel.is_admin == True).first()
+            if admin:
+                admin_id = admin.id
+
+            conn.execute(text(
+                "UPDATE system_settings SET value = :v WHERE key = 'last_auto_download_at'"
+            ), {"v": datetime.now(timezone.utc).isoformat()})
+            db.commit()
+        except Exception:
+            return
+
+    for account_id in opted_in:
+        book_ids = libation_svc.get_liberate_book_ids(
+            filter_status="not_liberated",
+            account_id=account_id,
+        )
+        for book_id in book_ids:
+            with SessionLocal() as db:
+                existing = db.query(Download).filter(
+                    Download.book_id == book_id,
+                    Download.status.in_(["queued", "running"]),
+                ).first()
+                if existing:
+                    continue
+                dl = Download(
+                    book_id=book_id,
+                    book_title=None,
+                    user_id=admin_id,
+                    status="queued",
+                )
+                db.add(dl)
+                db.commit()
+                db.refresh(dl)
+                dl_id = dl.id
+            await _run_download(dl_id, book_id)
+
 
 async def _run_download(download_id: int, book_id: str) -> None:
     with SessionLocal() as db:
@@ -103,6 +172,9 @@ async def _run_scan(scan_id: int) -> None:
             if exit_code != 0:
                 scan.error_message = output[-500:]
             db.commit()
+
+    if exit_code == 0:
+        asyncio.create_task(_auto_download_if_enabled())
 
 
 # ── Scan endpoints ────────────────────────────────────────────────────────────

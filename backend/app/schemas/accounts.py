@@ -9,6 +9,8 @@ class AccountResponse(BaseModel):
     authenticated: bool
     owner_name: str | None = None
     owner_username: str | None = None
+    auto_download: bool = False
+    added_by_user_id: int | None = None
 
 
 class StartLoginRequest(BaseModel):

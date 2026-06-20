@@ -36,7 +36,7 @@ class UserAdminResponse(BaseModel):
     download_cap: Optional[int] = None
     audible_account_id: Optional[str] = None
     owner_name: Optional[str] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

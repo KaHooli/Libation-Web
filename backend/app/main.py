@@ -59,6 +59,19 @@ def _migrate_db(db: Session) -> None:
         db.commit()
         print("[Libation] Migrated: added owner_name column")
 
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS audible_account_settings "
+        "(account_id TEXT PRIMARY KEY, added_by_user_id INTEGER, auto_download INTEGER NOT NULL DEFAULT 0)"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS system_settings "
+        "(key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')"
+    ))
+    conn.execute(text(
+        "INSERT OR IGNORE INTO system_settings (key, value) VALUES ('last_auto_download_at', '')"
+    ))
+    db.commit()
+
 
 def _seed_admin(db: Session) -> None:
     # Use the same raw-SQL approach as _migrate_db so there are no ORM mapper
@@ -72,10 +85,11 @@ def _seed_admin(db: Session) -> None:
         if row is None:
             conn.execute(
                 text(
-                    "INSERT INTO users (username, hashed_password, totp_enabled, is_active, is_admin)"
-                    " VALUES (:u, :pw, 0, 1, 1)"
+                    "INSERT INTO users (username, hashed_password, totp_enabled, is_active, is_admin, created_at)"
+                    " VALUES (:u, :pw, 0, 1, 1, :ts)"
                 ),
-                {"u": settings.ADMIN_USERNAME, "pw": hash_password(settings.ADMIN_PASSWORD)},
+                {"u": settings.ADMIN_USERNAME, "pw": hash_password(settings.ADMIN_PASSWORD),
+                 "ts": datetime.now(timezone.utc)},
             )
             db.commit()
             print(f"[Libation] Created admin user: {settings.ADMIN_USERNAME!r}", flush=True)
