@@ -285,6 +285,8 @@ def get_liberate_books(
 
             if filter_status == "audible_plus":
                 books = [b for b in books if b.get("is_audible_plus")]
+            elif filter_status == "purchased":
+                books = [b for b in books if not b.get("is_audible_plus")]
             elif filter_status != "all":
                 books = [b for b in books if b["liberate_status"] == filter_status]
 
@@ -388,6 +390,10 @@ def get_liberate_book_ids(
         elif filter_status == "audible_plus":
             where_parts.append(
                 "EXISTS (SELECT 1 FROM LibraryBooks lb WHERE lb.BookId=b.BookId AND lb.IsAudiblePlus=1)"
+            )
+        elif filter_status == "purchased":
+            where_parts.append(
+                "EXISTS (SELECT 1 FROM LibraryBooks lb WHERE lb.BookId=b.BookId AND lb.IsAudiblePlus=0)"
             )
 
         if search:

@@ -79,6 +79,8 @@ export function AccountsPage() {
   const [removing, setRemoving] = useState<string | null>(null);
   const [showNextStep, setShowNextStep] = useState(false);
   const [togglingAutoDownload, setTogglingAutoDownload] = useState<string | null>(null);
+  const [ownerNameInput, setOwnerNameInput] = useState("");
+  const [savingOwnerName, setSavingOwnerName] = useState(false);
 
   const fetchAccounts = () => {
     setLoading(true);
@@ -89,6 +91,11 @@ export function AccountsPage() {
   };
 
   useEffect(() => { fetchAccounts(); }, []);
+
+  useEffect(() => {
+    const myAccount = accounts.find(a => a.added_by_user_id === user?.id);
+    setOwnerNameInput(myAccount?.owner_name ?? "");
+  }, [accounts, user?.id]);
 
   const handleStartLogin = async () => {
     if (!email.trim()) return;
@@ -175,8 +182,29 @@ export function AccountsPage() {
   const canToggleAutoDownload = (acc: Account) =>
     user?.is_admin || acc.added_by_user_id === user?.id;
 
+  const saveOwnerName = async () => {
+    const trimmed = ownerNameInput.trim();
+    if (!trimmed) return;
+    setSavingOwnerName(true);
+    try {
+      await api.patch("/auth/me", { owner_name: trimmed });
+      fetchAccounts();
+    } catch {}
+    finally { setSavingOwnerName(false); }
+  };
+
   return (
     <div className="max-w-2xl space-y-6">
+      {/* Owner name banner */}
+      {!loading && accounts.some(a => a.added_by_user_id === user?.id && !a.owner_name) && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-4 py-3">
+          <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            Fill in owner name to use split libraries.
+          </p>
+        </div>
+      )}
+
       {/* Post-connection banner */}
       {showNextStep && (
         <div className="flex items-start gap-3 rounded-xl border border-brand-200 bg-brand-50 dark:border-brand-800 dark:bg-brand-950/40 px-4 py-3">
@@ -435,12 +463,25 @@ export function AccountsPage() {
               <div className="mt-2 ml-[3.25rem] flex items-center gap-1.5">
                 <User className="h-3.5 w-3.5 text-slate-300 shrink-0" />
                 <span className="text-xs text-slate-400">Owner:</span>
-                {acc.owner_name ? (
+                {acc.added_by_user_id === user?.id ? (
+                  <input
+                    type="text"
+                    value={ownerNameInput}
+                    onChange={e => setOwnerNameInput(e.target.value)}
+                    onBlur={saveOwnerName}
+                    onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                    placeholder="Fill in your first name"
+                    className="w-36 text-xs rounded border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-1.5 py-0.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500 placeholder:text-white dark:placeholder:text-white"
+                  />
+                ) : acc.owner_name ? (
                   <span className="text-xs font-medium text-slate-700">{acc.owner_name}</span>
                 ) : acc.owner_username ? (
                   <span className="text-xs text-slate-500">{acc.owner_username}</span>
                 ) : (
                   <span className="text-xs italic text-slate-300">Unassigned</span>
+                )}
+                {acc.added_by_user_id === user?.id && savingOwnerName && (
+                  <Loader2 className="h-3 w-3 animate-spin text-slate-400" />
                 )}
               </div>
 

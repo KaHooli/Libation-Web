@@ -37,10 +37,11 @@ interface CapStatus {
   resets_at: string | null;
 }
 
-type FilterTab = "all" | "audible_plus" | "liberated" | "not_liberated" | "downloading";
+type FilterTab = "all" | "purchased" | "audible_plus" | "liberated" | "not_liberated" | "downloading";
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All" },
+  { key: "purchased", label: "Purchased" },
   { key: "audible_plus", label: "Audible Plus" },
   { key: "liberated", label: "Downloaded" },
   { key: "not_liberated", label: "Not Downloaded" },
@@ -555,6 +556,7 @@ export function LiberatePage() {
           </div>
           <p className="text-sm text-slate-500 dark:text-slate-400">
             {filter === "all" ? "No books in library yet. Connect an account and scan."
+              : filter === "purchased" ? "No purchased titles found in your library."
               : filter === "audible_plus" ? "No Audible Plus titles found in your library."
               : `No books with status "${filter}".`}
           </p>
