@@ -76,6 +76,7 @@
     <Variable>
       <Value>change-me-use-a-long-random-string</Value>
       <Name>SECRET_KEY</Name>
+      <Description>Used to sign authentication tokens. Use a random string of at least 32 characters — longer is better. Avoid $ and " characters.</Description>
       <Mode/>
     </Variable>
     <Variable>
