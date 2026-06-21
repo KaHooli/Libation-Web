@@ -999,7 +999,7 @@ function LogsSection() {
     finally { setLoading(false); }
   }, [lineCount, level]);
 
-  useEffect(() => { fetchLogs(true); }, [fetchLogs]);
+  useEffect(() => { fetchLogs(false); }, [fetchLogs]);
 
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
