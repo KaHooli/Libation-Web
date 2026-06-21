@@ -9,13 +9,13 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 ## Features
 
 - **Liberate view** — default landing page; shows your full Audible library with download status overlays (downloaded ✓, not downloaded ✕, in-progress spinner)
-- **Filter & search** — filter by status (All / Downloaded / Not Downloaded / In Progress / Audible Plus), search by title, filter by owner
+- **Filter & search** — filter by status (All / Downloaded / Not Downloaded / In Progress / Purchased / Audible Plus), search by title, filter by owner
 - **Owner tabs** — link each web UI user to an Audible account; books are filterable by owner
 - **Download management** — one-click download per book, Download All (uncapped), Download Next N (capped users); real-time progress bars (0–100%) via LibationBridge; 2-second polling while downloads are active
 - **Mark as downloaded** — manually set a book's status so LibationCLI treats it as already liberated
 - **Multi-select** — select individual books or Select All (across all pages), then bulk Mark Downloaded / Mark Not Downloaded
 - **Per-page selector** — choose 24 / 48 / 96 / 200 books per page
-- **Accounts page** — add or remove Audible accounts; add via `login-external` OAuth flow (3-step: form → copy URL → paste response)
+- **Accounts page** — add or remove Audible accounts via `login-external` OAuth flow (3-step: form → copy URL → paste response); inline owner name input for accounts you added; amber banner prompts you to set your owner name if unset
 - **Downloads page** — active queue with progress bars, failed/completed history, library scan trigger
 - **Multi-user support** — admin can create/disable/delete users; per-user permission flags and 12-hour rolling download caps
 - **User management** — set owner name and link each user to an Audible account
@@ -33,7 +33,6 @@ The image is published to two registries — use whichever you prefer:
 | Registry | Image |
 |----------|-------|
 | Docker Hub | `jtechguru1993/libation-web:latest` |
-| GitHub Container Registry | `ghcr.io/jtechguru1/libation-web:latest` |
 
 ---
 
@@ -44,7 +43,7 @@ The image is published to two registries — use whichever you prefer:
 cp .env.example .env
 # Edit .env — set a strong SECRET_KEY and change the admin credentials
 
-# Start (uses ghcr.io by default — edit docker-compose.yml to switch to Docker Hub)
+# Start
 docker compose up -d
 ```
 
@@ -107,7 +106,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Installing on Unraid
 
-> **Note:** You can use either `jtechguru1993/libation-web:latest` (Docker Hub) or `ghcr.io/jtechguru1/libation-web:latest` (GitHub Container Registry) — both are kept in sync.
+> **Note:** The image is published to Docker Hub as `jtechguru1993/libation-web:latest`.
 
 ### Step 1 — Add the container
 
@@ -119,7 +118,7 @@ Fill in these basic fields:
 | Field | Value |
 |-------|-------|
 | Name | `LibationWeb` |
-| Repository | `ghcr.io/jtechguru1/libation-web:latest` |
+| Repository | `jtechguru1993/libation-web:latest` |
 | Network Type | `Bridge` |
 | Web UI | `http://[IP]:[PORT:8000]/` |
 

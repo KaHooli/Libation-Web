@@ -194,9 +194,9 @@
 ### React resilience ✅
 - [x] Root `ErrorBoundary` component wraps the whole app — catches render crashes instead of leaving a blank white page with a dead back button
 
-### Dual registry publishing ✅
-- [x] Image published to both Docker Hub (`jtechguru1993/libation-web:latest`) and GitHub Container Registry (`ghcr.io/jtechguru1/libation-web:latest`), kept in sync on every push
-- [x] README and Unraid template updated to reference both
+### Docker Hub publishing ✅
+- [x] Image published to Docker Hub (`jtechguru1993/libation-web:latest`) on every push
+- [x] README and Unraid template updated to reference Docker Hub
 
 ### Branding fix ✅
 - [x] Replaced default favicon and sidebar headphones icon with official Libation branding (`libation_logo_dark.svg` for sidebar, `favicon.svg` + `libation.ico` fallback for browser tab)
@@ -243,6 +243,29 @@ Replaced `libationcli` subprocess calls for downloads and scans with a LibationB
 
 ### Accounts ✅
 - [x] `DELETE /api/accounts/{account_id}` — directly edits `/config/AccountsSettings.json`, filters out the matching entry, writes back; resolves "account removal not implemented" from Phase 3
+
+---
+
+---
+
+## Phase 8 — Operational Hardening ✅
+- [x] Per-Audible-account auto-download toggle — `audible_account_settings.auto_download`; `_auto_download_if_enabled()` fires after every successful scan with 30-min global cooldown via `system_settings.last_auto_download_at`
+- [x] Default-credentials detection — `GET /api/auth/default-credentials`; SettingsPage shows amber warning banner + `UpdateCredentialsSection` (change username + password in one step, signs out after)
+- [x] `POST /api/auth/change-username` endpoint added
+- [x] OAuth flow auto-triggers library scan + dismissable info banner on completion
+- [x] Logs API — `GET /api/logs` (admin, filterable by level, up to 2000 lines) + `GET /api/logs/download`
+- [x] `LogsSection` embedded in Settings — dark monospace viewer, level filter tabs, line count selector, auto-refresh, download button
+- [x] `ApiDocsSection` in Settings — links to `/docs` (Swagger) and `/redoc`
+- [x] Sidebar nav renamed "Accounts" → "Audible Accounts"
+- [x] `UserAdminResponse.created_at` made Optional (handles NULL from early-seeded users)
+- [x] `AccountResponse` gains `auto_download` and `added_by_user_id` fields
+
+---
+
+## Phase 8 Extended ✅
+- [x] **Owner name input on Accounts page** — inline editable input in Owner column for accounts the logged-in user added; saves via `PATCH /api/auth/me` on blur/Enter; placeholder "Fill in your first name"
+- [x] **Amber banner on Accounts page** — shown when current user has added an account but `owner_name` is unset; text: "Fill in owner name to use split libraries."
+- [x] **Purchased filter tab on Liberate page** — between All and Audible Plus; filters `LibraryBooks.IsAudiblePlus=0` in both `get_liberate_books()` and `get_liberate_book_ids()`
 
 ---
 
