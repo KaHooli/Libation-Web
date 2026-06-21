@@ -20,7 +20,7 @@
   <Category>Downloaders: MediaApp:Music</Category>
   <WebUI>http://[IP]:[PORT:8000]</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/jtechguru1/Libation/web-ui-via-docker/unraid-template.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/rmcrackan/Libation/master/Source/LibationWinForms/Resources/Libation%20icon/glass-with-glow_256.png</Icon>
+  <Icon>https://raw.githubusercontent.com/jtechguru1/Libation/web-ui-via-docker/unraid-icon.png</Icon>
   <ExtraParams></ExtraParams>
   <PostArgs></PostArgs>
   <CPUset></CPUset>
