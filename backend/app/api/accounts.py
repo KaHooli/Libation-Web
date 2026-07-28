@@ -49,6 +49,8 @@ async def login_start(body: StartLoginRequest, _=Depends(get_current_user)):
     try:
         result = await cli.start_login(body.email, body.locale)
         return StartLoginResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
