@@ -3,12 +3,12 @@ name: Publish Docker image to GHCR
 on:
   push:
     branches:
-      - web-ui-via-docker
+      - main
     tags:
       - "v*"
   pull_request:
     branches:
-      - web-ui-via-docker
+      - main
   workflow_dispatch:
 
 # Supersede an in-flight build when new commits land on the same ref.
@@ -44,8 +44,9 @@ jobs:
             runner: ubuntu-24.04
           - platform: linux/arm64
             # Native arm64 runner. Emulating the .NET publish under QEMU takes
-            # well over an hour; this keeps the arm64 leg roughly at parity
-            # with amd64. Free for public repositories.
+            # well over an hour, so this is worth it even though private-repo
+            # arm64 runners get 2 vCPUs rather than the 4 public repos get.
+            # Standard runner: draws on the plan's included Actions minutes.
             runner: ubuntu-24.04-arm
     env:
       REGISTRY_IMAGE: ${{ needs.prepare.outputs.image }}
@@ -124,10 +125,6 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
-      # Note on the `latest` tag: web-ui-via-docker is this project's release
-      # branch, but it is not the repository default branch (master tracks
-      # upstream Libation), so metadata-action's is_default_branch would never
-      # fire. `latest` is therefore pinned to that branch explicitly.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -138,7 +135,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=long
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/web-ui-via-docker' }}
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
