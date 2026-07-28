@@ -130,6 +130,7 @@ for entry in $LOCALES; do
       ;;
     *)
       bad "$locale — bad or empty assoc_handle: '${handle}'"
+      printf '       url: %s\n' "$url"
       ;;
   esac
 done
