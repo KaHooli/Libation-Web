@@ -141,9 +141,14 @@ async def start_login(email: str, locale: str) -> dict:
     os.close(slave_fd)
 
     try:
+        # The trailing \s matters. _read_fd_until re-tests this pattern after
+        # every read, so an unterminated pattern matches the moment the URL
+        # straddles a chunk boundary and returns a truncated link. LibationCli
+        # emits the URL with Console.WriteLine, so requiring the newline proves
+        # the whole URL has arrived.
         output = await _read_fd_until(
             master_fd,
-            pattern=r"https://www\.amazon\.[^\s]+",
+            pattern=r"https://www\.amazon\.\S+\s",
             timeout=30,
         )
     except asyncio.TimeoutError:
@@ -169,20 +174,33 @@ async def start_login(email: str, locale: str) -> dict:
 
     login_url = match.group(0).rstrip(".")
 
-    # `Locale.Empty` renders an empty top-level domain, e.g.
-    # "https://www.amazon./ap/signin?...". Fail loudly rather than handing the
-    # user a URL that cannot resolve.
+    # Never hand back a URL that cannot work. Two distinct failure modes:
+    problem: str | None = None
+
+    # 1. `Locale.Empty` renders an empty top-level domain, e.g.
+    #    "https://www.amazon./ap/signin?...".
     if re.match(r"https://www\.amazon\.(?:[/?]|$)", login_url):
+        problem = (
+            f"empty Amazon domain — marketplace {locale!r} was not recognised by LibationCli"
+        )
+    else:
+        # 2. A short read. Both parameters are always present in a complete
+        #    sign-in URL, so either one missing means the URL was cut off.
+        missing = [
+            p for p in ("openid.assoc_handle=", "openid.oa2.code_challenge=")
+            if p not in login_url
+        ]
+        if missing:
+            problem = f"truncated login URL, missing {' and '.join(missing)}"
+
+    if problem:
         proc.kill()
         try:
             os.close(master_fd)
         except OSError:
             pass
-        logger.error("[login] Malformed login URL for locale %r (empty domain): %s", locale, login_url)
-        raise RuntimeError(
-            f"LibationCli produced a malformed login URL for marketplace {locale!r} "
-            "(empty Amazon domain). The locale was not recognised by LibationCli."
-        )
+        logger.error("[login] Malformed login URL for locale %r: %s — %s", locale, problem, login_url)
+        raise RuntimeError(f"LibationCli produced a malformed login URL: {problem}.")
 
     logger.info("[login] Login URL generated for %s (%.1fs) — waiting for user response", email, time.monotonic() - t0)
     session_id = str(uuid.uuid4())

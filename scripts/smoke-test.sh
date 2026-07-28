@@ -120,6 +120,17 @@ for entry in $LOCALES; do
       ;;
   esac
 
+  # A short read from the PTY used to return a partial URL, so verify the
+  # trailing OAuth parameters actually arrived.
+  case "$url" in
+    *"openid.oa2.code_challenge="*) ;;
+    *)
+      bad "$locale — truncated URL (no openid.oa2.code_challenge)"
+      printf '       url: %s\n' "$url"
+      continue
+      ;;
+  esac
+
   # assoc_handle is the second field that came back blank. Assert it carries a
   # country suffix rather than pinning an exact value.
   handle=$(printf '%s' "$url" \
@@ -134,6 +145,34 @@ for entry in $LOCALES; do
       ;;
   esac
 done
+
+# The PTY short-read bug was timing-dependent and showed up roughly 1 run in 15,
+# so a single check per locale is not enough to prove it is gone.
+REPEATS="${SMOKE_REPEATS:-15}"
+echo "==> Repeating australia ${REPEATS}x to shake out the PTY read race"
+truncated=0
+for i in $(seq 1 "$REPEATS"); do
+  url=$(curl -fsS -X POST "${BASE}/accounts/login/start" \
+    -H "authorization: Bearer $TOKEN" \
+    -H 'content-type: application/json' \
+    -d "{\"email\":\"smoke-repeat-${i}@example.invalid\",\"locale\":\"australia\"}" \
+    | jq -r '.login_url' 2>/dev/null) || url=""
+
+  case "$url" in
+    "https://www.amazon.com.au/ap/signin?"*"openid.assoc_handle=amzn_audible_android_aui_au"*"openid.oa2.code_challenge="*)
+      ;;
+    *)
+      truncated=$((truncated + 1))
+      printf '       run %s returned: %s\n' "$i" "$url"
+      ;;
+  esac
+done
+
+if [ "$truncated" -eq 0 ]; then
+  ok "australia stable across ${REPEATS} runs"
+else
+  bad "${truncated}/${REPEATS} australia runs returned an incomplete URL"
+fi
 
 echo "==> Checking that bad locales are rejected"
 for bad_locale in au de xx ""; do
