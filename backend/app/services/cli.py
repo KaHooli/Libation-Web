@@ -16,6 +16,16 @@ from .logger import get_logger, log_cli
 
 _PENDING_LOGINS: dict[str, dict] = {}
 
+# Valid values for `libationcli login-external --locale`. These are AudibleApi
+# `Locale.Name` values, NOT ISO country codes. `Localization.Get()` matches on
+# Name and silently returns `Locale.Empty` for anything unrecognised, which
+# yields a malformed sign-in URL (`https://www.amazon./ap/signin`) instead of an
+# error — so validate up front.
+VALID_LOCALES = frozenset({
+    "us", "uk", "germany", "france", "canada", "australia",
+    "japan", "italy", "spain", "india", "brazil",
+})
+
 
 def _cmd(*args: str) -> list[str]:
     return [settings.LIBATION_CLI, *args, "--libationFiles", settings.LIBATION_CONFIG]
@@ -110,6 +120,14 @@ async def list_accounts() -> list[dict]:
 async def start_login(email: str, locale: str) -> dict:
     """Start login-external via PTY. Kept in Python — PTY allocation is simpler here."""
     logger = get_logger()
+    locale = (locale or "").strip().lower()
+    if locale not in VALID_LOCALES:
+        logger.error("[login] Rejected unknown locale %r for %s", locale, email)
+        raise ValueError(
+            f"Unknown Audible marketplace {locale!r}. "
+            f"Expected one of: {', '.join(sorted(VALID_LOCALES))}."
+        )
+
     logger.info("[login] Starting login-external for %s (%s)", email, locale)
     t0 = time.monotonic()
     master_fd, slave_fd = pty.openpty()
@@ -150,6 +168,22 @@ async def start_login(email: str, locale: str) -> dict:
         )
 
     login_url = match.group(0).rstrip(".")
+
+    # `Locale.Empty` renders an empty top-level domain, e.g.
+    # "https://www.amazon./ap/signin?...". Fail loudly rather than handing the
+    # user a URL that cannot resolve.
+    if re.match(r"https://www\.amazon\.(?:[/?]|$)", login_url):
+        proc.kill()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        logger.error("[login] Malformed login URL for locale %r (empty domain): %s", locale, login_url)
+        raise RuntimeError(
+            f"LibationCli produced a malformed login URL for marketplace {locale!r} "
+            "(empty Amazon domain). The locale was not recognised by LibationCli."
+        )
+
     logger.info("[login] Login URL generated for %s (%.1fs) — waiting for user response", email, time.monotonic() - t0)
     session_id = str(uuid.uuid4())
     _PENDING_LOGINS[session_id] = {

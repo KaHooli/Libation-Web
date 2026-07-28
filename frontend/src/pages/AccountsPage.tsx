@@ -22,18 +22,24 @@ interface Account {
 
 type Step = "idle" | "form" | "url" | "completing" | "done";
 
+// `value` MUST be the AudibleApi `Locale.Name`, not the ISO country code.
+// LibationCli resolves `--locale` via `Localization.Get(name)`, which matches on
+// Locale.Name and falls back to `Locale.Empty` (blank TopDomain/CountryCode) for
+// anything it does not recognise — producing a broken sign-in URL such as
+// `https://www.amazon./ap/signin`. Only "us" and "uk" happen to have a Name that
+// is identical to their country code, which is why every other marketplace broke.
 const LOCALES = [
   { value: "us", label: "United States" },
   { value: "uk", label: "United Kingdom" },
-  { value: "de", label: "Germany" },
-  { value: "fr", label: "France" },
-  { value: "ca", label: "Canada" },
-  { value: "au", label: "Australia" },
-  { value: "jp", label: "Japan" },
-  { value: "it", label: "Italy" },
-  { value: "es", label: "Spain" },
-  { value: "in", label: "India" },
-  { value: "br", label: "Brazil" },
+  { value: "germany", label: "Germany" },
+  { value: "france", label: "France" },
+  { value: "canada", label: "Canada" },
+  { value: "australia", label: "Australia" },
+  { value: "japan", label: "Japan" },
+  { value: "italy", label: "Italy" },
+  { value: "spain", label: "Spain" },
+  { value: "india", label: "India" },
+  { value: "brazil", label: "Brazil" },
 ];
 
 function LocaleBadge({ locale }: { locale: string }) {
