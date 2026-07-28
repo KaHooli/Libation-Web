@@ -1,0 +1,164 @@
+name: Publish Docker image to GHCR
+
+on:
+  push:
+    branches:
+      - web-ui-via-docker
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - web-ui-via-docker
+  workflow_dispatch:
+
+# Supersede an in-flight build when new commits land on the same ref.
+# Tag builds are never cancelled.
+concurrency:
+  group: docker-ghcr-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  # GHCR requires a lowercase image path, but github.repository_owner preserves
+  # the account's original casing (e.g. "KaHooli"), so normalise it once here.
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - id: image
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${owner}/libation-web" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            # Native arm64 runner. Emulating the .NET publish under QEMU takes
+            # well over an hour; this keeps the arm64 leg roughly at parity
+            # with amd64. Free for public repositories.
+            runner: ubuntu-24.04-arm
+    env:
+      REGISTRY_IMAGE: ${{ needs.prepare.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive platform slug
+        id: platform
+        run: echo "pair=${{ matrix.platform }}" | tr '/' '-' >> "$GITHUB_OUTPUT"
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pull requests build only. A PR from a fork gets a read-only GITHUB_TOKEN,
+      # so pushing would fail; this still catches a broken Dockerfile.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.REGISTRY_IMAGE }}
+          cache-from: type=gha,scope=${{ steps.platform.outputs.pair }}
+          cache-to: type=gha,mode=max,scope=${{ steps.platform.outputs.pair }}
+          outputs: ${{ github.event_name == 'pull_request' && 'type=cacheonly' || 'type=image,push-by-digest=true,name-canonical=true,push=true' }}
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ steps.platform.outputs.pair }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Combine the two single-arch images into one multi-arch manifest and apply
+  # the human-readable tags. Only this job creates tags; the build job pushes
+  # untagged digests.
+  merge:
+    needs: [prepare, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY_IMAGE: ${{ needs.prepare.outputs.image }}
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      # Note on the `latest` tag: web-ui-via-docker is this project's release
+      # branch, but it is not the repository default branch (master tracks
+      # upstream Libation), so metadata-action's is_default_branch would never
+      # fire. `latest` is therefore pinned to that branch explicitly.
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/web-ui-via-docker' }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest list
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # Word splitting is intentional: both subshells expand to multiple
+          # separate arguments (-t <tag> ... and one image ref per digest file).
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${REGISTRY_IMAGE}@sha256:%s " *)
+
+      - name: Inspect published image
+        run: docker buildx imagetools inspect "${REGISTRY_IMAGE}:${{ steps.meta.outputs.version }}"

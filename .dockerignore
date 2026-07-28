@@ -1,0 +1,36 @@
+# Git history is ~143 MB and is never needed by the build
+.git
+.gitignore
+.github
+
+# Runtime volume mounts — must never be baked into the image
+data/
+config/
+audiobooks/
+
+# Frontend build artefacts (Stage 1 runs its own npm install / npm run build)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# .NET build artefacts (Stage 2 runs its own dotnet publish)
+libation-bridge/bin/
+libation-bridge/obj/
+
+# Python caches
+**/__pycache__/
+**/*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Local tooling / editor state
+.vscode/
+.idea/
+.DS_Store
+
+# Docs and deployment descriptors not used by the image
+*.md
+docker-compose.yml
+unraid-template.xml
+unraid-icon.png

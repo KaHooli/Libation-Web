@@ -33,6 +33,19 @@ The image is published to two registries — use whichever you prefer:
 | Registry | Image |
 |----------|-------|
 | Docker Hub | `jtechguru1993/libation-web:latest` |
+| GitHub Container Registry | `ghcr.io/jtechguru1/libation-web:latest` |
+
+Both are `linux/amd64` + `linux/arm64` multi-arch manifests. The GHCR image is
+built and pushed automatically by
+[`.github/workflows/docker-ghcr.yml`](.github/workflows/docker-ghcr.yml) on every
+push to `web-ui-via-docker`, in addition to these tags:
+
+| Tag | Produced by |
+|-----|-------------|
+| `latest` | every push to `web-ui-via-docker` |
+| `web-ui-via-docker` | every push to that branch |
+| `sha-<full-commit-sha>` | every push, for pinning an exact build |
+| `1.2.3`, `1.2` | pushing a `v1.2.3` git tag |
 
 ---
 
@@ -106,7 +119,8 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Installing on Unraid
 
-> **Note:** The image is published to Docker Hub as `jtechguru1993/libation-web:latest`.
+> **Note:** The image is published to Docker Hub as `jtechguru1993/libation-web:latest`
+> and to GHCR as `ghcr.io/jtechguru1/libation-web:latest`.
 
 ### Step 1 — Add the container
 
