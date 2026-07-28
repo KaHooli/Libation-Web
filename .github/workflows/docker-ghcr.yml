@@ -105,11 +105,37 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Boot the amd64 image and assert the Audible sign-in URLs are well-formed.
+  # This gates `merge`, so an image that fails never receives a usable tag.
+  # Rebuilding here is cheap: the layers are already in the cache from `build`,
+  # and `load: true` cannot be combined with the digest-push exporter.
+  smoke:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Load amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: libation-web:smoke
+          cache-from: type=gha,scope=linux-amd64
+
+      - name: Run smoke test
+        run: ./scripts/smoke-test.sh libation-web:smoke
+
   # Combine the two single-arch images into one multi-arch manifest and apply
   # the human-readable tags. Only this job creates tags; the build job pushes
   # untagged digests.
   merge:
-    needs: [prepare, build]
+    needs: [prepare, build, smoke]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
