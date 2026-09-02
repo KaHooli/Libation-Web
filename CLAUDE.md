@@ -215,7 +215,7 @@ Commands are polled via `GET /api/v1/command/{id}` every 2s for up to 5 minutes.
 - **ApiDocsSection in Settings**: two links to FastAPI's built-in `/docs` (Swagger UI) and `/redoc`; admin-only, below LogsSection
 
 ## Logging (`backend/app/services/logger.py`)
-- Writes to `/config/logs/libation-web.log` (on the mapped `/config` volume — survives container restarts)
+- Writes to `{LIBATION_CONFIG}/logs/libation-web.log` — `/config/logs/libation-web.log` in the container (on the mapped `/config` volume, so it survives restarts). `log_file_path()` is the single source of truth; `api/logs.py` reads it rather than naming the path again
 - `RotatingFileHandler`: 5 MB per file, 3 backups (`libation-web.log`, `.1`, `.2`, `.3`)
 - Log format: `YYYY-MM-DD HH:MM:SS [LEVEL] message`
 - Logged events:

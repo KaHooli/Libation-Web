@@ -38,6 +38,21 @@ os.environ.setdefault("SECRET_KEY", "chaptarr-test-only-not-a-real-secret")
 os.environ.setdefault("ADMIN_USERNAME", "admin")
 os.environ.setdefault("ADMIN_PASSWORD", "admin")
 
+# The app must confine itself to the directories its settings name. A hardcoded
+# "/config" or "/data" merely succeeds on a root dev box while failing on an
+# unprivileged host (CI), so record what exists up front and fail if the app
+# creates any of them.
+PRODUCTION_PATHS = [Path("/data"), Path("/config"), Path("/audiobooks")]
+PREEXISTING = {p for p in PRODUCTION_PATHS if p.exists()}
+
+
+def assert_no_stray_dirs() -> None:
+    created = sorted(str(p) for p in PRODUCTION_PATHS if p.exists() and p not in PREEXISTING)
+    assert not created, (
+        f"app created {created} instead of using its configured paths — "
+        "this fails on an unprivileged host"
+    )
+
 API_KEY = "test-api-key-123"
 ASIN = "B002V0QUOC"
 UNKNOWN_ASIN = "B0UNKNOWN1"
@@ -128,8 +143,11 @@ def main():
     # The app must honour DATABASE_URL rather than reaching for a hardcoded
     # /data, which an unprivileged host (CI) cannot create.
     from app.database import db_directory
+    from app.services.logger import log_file_path
     assert Path(db_directory()) == WORKDIR / "data", db_directory()
-    print("✓ app database stays inside DATABASE_URL, not a hardcoded /data")
+    assert log_file_path().parent == CONFIG / "logs", log_file_path()
+    assert_no_stray_dirs()
+    print("✓ database and log paths follow the settings, not hardcoded /data or /config")
 
     with TestClient(app) as client:
         r = client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
@@ -287,6 +305,8 @@ def main():
     print("✓ auto-import hook no-ops when Chaptarr is not usable")
 
     srv.shutdown()
+    assert_no_stray_dirs()
+    print("✓ no stray top-level directories created")
     print("\nAll Chaptarr integration checks passed.")
 
 

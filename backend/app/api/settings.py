@@ -9,13 +9,14 @@ from ..schemas.settings import LibationSettings, AppStats, DownloadsPerUser
 from ..schemas.auth import MessageResponse
 from ..models.download import Download
 from ..models.user import User
+from ..config import settings as app_settings
 from ..services import cli as cli_svc
 from ..services.libation import count_books
 from .auth import get_current_user
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
-APPSETTINGS_PATH = "/config/appsettings.json"
+APPSETTINGS_PATH = os.path.join(app_settings.LIBATION_CONFIG, "appsettings.json")
 
 # Maps our schema field names to known Libation appsettings.json key variants
 _FIELD_MAP = {

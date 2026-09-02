@@ -2,11 +2,22 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-_LOG_DIR = Path("/config/logs")
+from ..config import settings
+
+# Derived from LIBATION_CONFIG rather than hardcoded to /config: the deployed
+# container mounts its volume there, but a run outside Docker points the setting
+# elsewhere and cannot create a top-level directory.
+_LOG_DIR = Path(settings.LIBATION_CONFIG) / "logs"
 _LOG_FILE = _LOG_DIR / "libation-web.log"
 _MAX_OUTPUT_CHARS = 20_000  # truncate very long CLI output in log entries
 
 _logger: logging.Logger | None = None
+
+
+def log_file_path() -> Path:
+    """The file get_logger() writes to — so readers can't name a different one."""
+    return _LOG_FILE
+
 
 
 def get_logger() -> logging.Logger:

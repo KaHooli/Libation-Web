@@ -282,7 +282,7 @@ Replaced `libationcli` subprocess calls for downloads and scans with a LibationB
 - [x] **Auto-import hook** — fires after every successful download when enabled
 - [x] **UI** — `ChaptarrSection` in Settings (connection, test, import mode, path mapping, recent imports with live polling); **Send to Chaptarr** bulk action in Liberate's Multi Select mode
 - [x] **CI** — `scripts/test-chaptarr.py` runs the whole flow against a stub Chaptarr server; gates the `merge` job
-- [x] **`database.py` honours `DATABASE_URL`** — `ensure_db_directory()` creates the directory the configured SQLite URL actually points at instead of hardcoding `/data`, which an unprivileged host (the CI runner) cannot create. The deployed container is unaffected: the Dockerfile already creates `/data` at build time
+- [x] **Runtime paths follow their settings** — `database.py` creates the directory the configured SQLite URL points at (`ensure_db_directory()`) instead of hardcoding `/data`, and `logger.py` / `api/logs.py` / `api/settings.py` derive `/config` paths from `LIBATION_CONFIG`. Hardcoded top-level paths merely succeed on a root dev box while failing on an unprivileged host (the CI runner). The deployed container is unaffected — the Dockerfile creates `/data` and `/config` at build time. `scripts/test-chaptarr.py` asserts no stray top-level directory is created, so the same mistake fails on any box
 
 ---
 
