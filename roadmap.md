@@ -282,6 +282,7 @@ Replaced `libationcli` subprocess calls for downloads and scans with a LibationB
 - [x] **Auto-import hook** — fires after every successful download when enabled
 - [x] **UI** — `ChaptarrSection` in Settings (connection, test, import mode, path mapping, recent imports with live polling); **Send to Chaptarr** bulk action in Liberate's Multi Select mode
 - [x] **CI** — `scripts/test-chaptarr.py` runs the whole flow against a stub Chaptarr server; gates the `merge` job
+- [x] **`database.py` honours `DATABASE_URL`** — `ensure_db_directory()` creates the directory the configured SQLite URL actually points at instead of hardcoding `/data`, which an unprivileged host (the CI runner) cannot create. The deployed container is unaffected: the Dockerfile already creates `/data` at build time
 
 ---
 

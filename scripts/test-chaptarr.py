@@ -125,6 +125,12 @@ def main():
         }
     }))
 
+    # The app must honour DATABASE_URL rather than reaching for a hardcoded
+    # /data, which an unprivileged host (CI) cannot create.
+    from app.database import db_directory
+    assert Path(db_directory()) == WORKDIR / "data", db_directory()
+    print("✓ app database stays inside DATABASE_URL, not a hardcoded /data")
+
     with TestClient(app) as client:
         r = client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
         assert r.status_code == 200, r.text

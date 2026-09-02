@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .database import engine, SessionLocal, Base
+from .database import engine, SessionLocal, Base, ensure_db_directory
 from .models import user as user_models  # noqa: F401 — registers models
 from .models import download as download_models  # noqa: F401 — registers models
 from .models import chaptarr as chaptarr_models  # noqa: F401 — registers models
@@ -116,7 +116,7 @@ def _seed_admin(db: Session) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    os.makedirs("/data", exist_ok=True)
+    ensure_db_directory()
     Base.metadata.create_all(bind=engine)
     logger = get_logger()
     logger.info("[startup] Libation Web UI starting up")
