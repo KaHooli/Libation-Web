@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from .database import engine, SessionLocal, Base
 from .models import user as user_models  # noqa: F401 — registers models
 from .models import download as download_models  # noqa: F401 — registers models
+from .models import chaptarr as chaptarr_models  # noqa: F401 — registers models
 from .models.download import Scan, Download
 from .api import auth as auth_router
 from .api import library as library_router
@@ -23,7 +24,9 @@ from .api import settings as settings_router
 from .api import liberate as liberate_router
 from .api import updates as updates_router
 from .api import logs as logs_router
+from .api import chaptarr as chaptarr_router
 from .services.auth import hash_password, get_user_by_username
+from .services.chaptarr import SETTING_KEYS as CHAPTARR_SETTING_KEYS
 from .services.logger import get_logger
 from .models.user import User
 from .config import settings
@@ -70,6 +73,11 @@ def _migrate_db(db: Session) -> None:
     conn.execute(text(
         "INSERT OR IGNORE INTO system_settings (key, value) VALUES ('last_auto_download_at', '')"
     ))
+    for key, default in CHAPTARR_SETTING_KEYS.items():
+        conn.execute(
+            text("INSERT OR IGNORE INTO system_settings (key, value) VALUES (:k, :v)"),
+            {"k": key, "v": default},
+        )
     db.commit()
 
 
@@ -161,6 +169,7 @@ app.include_router(settings_router.router)
 app.include_router(liberate_router.router)
 app.include_router(updates_router.router)
 app.include_router(logs_router.router)
+app.include_router(chaptarr_router.router)
 
 
 @app.get("/api/health", include_in_schema=False)

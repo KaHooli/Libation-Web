@@ -131,11 +131,33 @@ jobs:
       - name: Run smoke test
         run: ./scripts/smoke-test.sh libation-web:smoke
 
+  # Exercise the Chaptarr integration against a stub Chaptarr server. This runs
+  # on the source tree rather than the image — it needs nothing from the
+  # container, and catches a broken payload before an image is ever tagged.
+  chaptarr:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run Chaptarr integration test
+        run: PYTHONPATH=backend python scripts/test-chaptarr.py
+
   # Combine the two single-arch images into one multi-arch manifest and apply
   # the human-readable tags. Only this job creates tags; the build job pushes
   # untagged digests.
   merge:
-    needs: [prepare, build, smoke]
+    needs: [prepare, build, smoke, chaptarr]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:

@@ -269,5 +269,21 @@ Replaced `libationcli` subprocess calls for downloads and scans with a LibationB
 
 ---
 
+## Phase 9 — Chaptarr Import ✅
+- [x] **Chaptarr client service** (`backend/app/services/chaptarr.py`) — talks Chaptarr's Readarr-compatible v1 API over `X-Api-Key`
+- [x] **ASIN-driven matching** — `GET /api/v1/book/lookup?term=az:{ASIN}&mediaType=audiobook` resolves the work / author / edition ids from the ASIN Libation already stores
+- [x] **ManualImport with supplied metadata** — `POST /api/v1/command` `{name: "ManualImport", files: [{foreignAuthorId, foreignBookId, foreignEditionId, selectionSource: 1}]}`; `selectionSource: 1` (UserMetadataSuggestion) makes Chaptarr materialize the author/book/edition from provider metadata, so **unmonitored books import**
+- [x] **Fallback** — ASIN unknown to Chaptarr's metadata server → `DownloadedBooksScan` on the containing folder with `requireDefaultRootFolderForMissingAuthors: true`
+- [x] **File location lookup** — reads Libation's `FileLocationsV2.json` file cache to find exactly what was written, with a books-dir glob fallback
+- [x] **Path mapping** — optional `path_from` → `path_to` prefix rewrite when the shared volume is mounted at different paths in the two containers
+- [x] **Settings** — stored in `system_settings` (`chaptarr_*` keys); API key is write-only over the API
+- [x] **`chaptarr_imports` table** — one row per attempt: status, matched_by, Chaptarr command id, message
+- [x] **API** — `GET/PUT /api/chaptarr/settings` (admin), `GET /api/chaptarr/status`, `POST /api/chaptarr/test` (admin), `POST /api/chaptarr/import`, `GET /api/chaptarr/imports`
+- [x] **Auto-import hook** — fires after every successful download when enabled
+- [x] **UI** — `ChaptarrSection` in Settings (connection, test, import mode, path mapping, recent imports with live polling); **Send to Chaptarr** bulk action in Liberate's Multi Select mode
+- [x] **CI** — `scripts/test-chaptarr.py` runs the whole flow against a stub Chaptarr server; gates the `merge` job
+
+---
+
 ## Future (not built)
 - [ ] Cap usage banner: "N / cap downloads used · Resets in Xh Ym" (use `resets_at` from 429 response)

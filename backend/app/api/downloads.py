@@ -11,7 +11,7 @@ from ..database import SessionLocal, get_db
 from ..models.download import Download, Scan
 from ..models.user import DEFAULT_PERMISSIONS
 from ..schemas.downloads import DownloadRequest, DownloadResponse, ScanResponse
-from ..services import cli
+from ..services import chaptarr as chaptarr_svc, cli
 
 router = APIRouter(prefix="/api/downloads", tags=["downloads"])
 
@@ -140,6 +140,8 @@ async def _run_download(download_id: int, book_id: str) -> None:
     except Exception as e:
         exit_code, output = 1, str(e)
 
+    book_title = None
+    user_id = None
     with SessionLocal() as db:
         dl = db.get(Download, download_id)
         if dl:
@@ -149,6 +151,14 @@ async def _run_download(download_id: int, book_id: str) -> None:
             if exit_code != 0:
                 dl.error_message = output[-500:]
             db.commit()
+            book_title = dl.book_title
+            user_id = dl.user_id
+
+    if exit_code == 0:
+        # Hand the finished file to Chaptarr. No-ops unless auto-import is on.
+        asyncio.create_task(
+            chaptarr_svc.import_after_download(book_id, book_title, user_id)
+        )
 
 
 async def _run_scan(scan_id: int) -> None:
