@@ -1,12 +1,12 @@
-from pathlib import Path
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, JSONResponse
 
 from ..api.users import require_admin
+from ..services.logger import log_file_path
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
-_LOG_FILE = Path("/config/logs/libation-web.log")
+_LOG_FILE = log_file_path()
 _MAX_LINES = 2000
 
 

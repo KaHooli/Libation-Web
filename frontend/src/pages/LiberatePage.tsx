@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   CheckCircle, XCircle, Loader2, Download, RefreshCw,
-  Headphones, Filter, CheckCheck, RotateCcw, Layers, X, Search,
+  Headphones, Filter, CheckCheck, RotateCcw, Layers, X, Search, Library,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, chaptarrApi } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { cn, formatDuration } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -38,6 +38,9 @@ interface CapStatus {
 }
 
 type FilterTab = "all" | "purchased" | "audible_plus" | "liberated" | "not_liberated" | "downloading";
+
+// Matches the server-side cap on ChaptarrImportRequest.book_ids.
+const CHAPTARR_BATCH = 200;
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All" },
@@ -203,6 +206,9 @@ export function LiberatePage() {
   const [search, setSearch] = useState("");
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [bulkMarking, setBulkMarking] = useState(false);
+  const [pushingToChaptarr, setPushingToChaptarr] = useState(false);
+  const [chaptarrEnabled, setChaptarrEnabled] = useState(false);
+  const [notice, setNotice] = useState("");
   const [selectingAll, setSelectingAll] = useState(false);
   const [bulkStatus, setBulkStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [error, setError] = useState("");
@@ -214,6 +220,12 @@ export function LiberatePage() {
       const withOwner = (r.data as AccountOwner[]).filter(a => a.owner_name || a.owner_username);
       setOwners(withOwner);
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    chaptarrApi.status()
+      .then(r => setChaptarrEnabled(r.data.enabled && r.data.configured))
+      .catch(() => setChaptarrEnabled(false));
   }, []);
 
   // Debounce search input by 300 ms
@@ -346,6 +358,35 @@ export function LiberatePage() {
     setBulkMarking(false);
   };
 
+  const sendToChaptarr = async () => {
+    if (selected.size === 0 || pushingToChaptarr) return;
+    setPushingToChaptarr(true);
+    setError(""); setNotice("");
+    // Select All can span the whole library; the endpoint takes 200 per call.
+    const ids = Array.from(selected);
+    let sent = 0;
+    try {
+      for (let i = 0; i < ids.length; i += CHAPTARR_BATCH) {
+        const { data } = await chaptarrApi.importBooks(ids.slice(i, i + CHAPTARR_BATCH));
+        sent += data.length;
+      }
+      setNotice(
+        `Sent ${sent} book${sent !== 1 ? "s" : ""} to Chaptarr. ` +
+        "Progress shows under Settings → Chaptarr import."
+      );
+      setSelected(new Set());
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(
+        sent > 0
+          ? `Sent ${sent} of ${ids.length} books before failing: ${detail || "unknown error"}`
+          : detail || "Failed to send books to Chaptarr."
+      );
+    } finally {
+      setPushingToChaptarr(false);
+    }
+  };
+
   const downloadAll = async () => {
     setBulkStatus("running");
     setError("");
@@ -365,6 +406,7 @@ export function LiberatePage() {
   return (
     <div className="space-y-4">
       {error && <Alert variant="error" className="mb-2">{error}<button className="ml-2 underline text-xs" onClick={() => setError("")}>dismiss</button></Alert>}
+      {notice && <Alert variant="info" className="mb-2">{notice}<button className="ml-2 underline text-xs" onClick={() => setNotice("")}>dismiss</button></Alert>}
 
       {/* Bulk liberate banner */}
       {bulkStatus === "running" && (
@@ -492,6 +534,16 @@ export function LiberatePage() {
                   >
                     <RotateCcw className="h-3.5 w-3.5" /> Mark Not Downloaded
                   </Button>
+                  {chaptarrEnabled && (
+                    <Button
+                      size="sm"
+                      onClick={sendToChaptarr}
+                      loading={pushingToChaptarr}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                    >
+                      <Library className="h-3.5 w-3.5" /> Send to Chaptarr
+                    </Button>
+                  )}
                 </>
               )}
               <Button size="sm" variant="outline" onClick={toggleMultiSelect}>

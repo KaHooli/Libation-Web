@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
+import { ChaptarrSection } from "@/components/settings/ChaptarrSection";
 
 // ── 2FA Section ─────────────────────────────────────────────────────────────
 
@@ -1162,6 +1163,7 @@ export function SettingsPage() {
       )}
       {usingDefaults && <UpdateCredentialsSection />}
       {user?.is_admin && <LibationSettingsSection />}
+      {user?.is_admin && <ChaptarrSection />}
       {user?.is_admin && <UserManagementSection />}
       {user?.is_admin && <UserPermissionsSection />}
       <SessionsSection />

@@ -25,6 +25,7 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 - Auth service: `backend/app/services/auth.py`
 - Frontend entry: `frontend/src/main.tsx`
 - Auth context: `frontend/src/context/AuthContext.tsx`
+- Chaptarr service: `backend/app/services/chaptarr.py`
 - Bridge source: `libation-bridge/Program.cs`
 - Bridge project: `libation-bridge/LibationBridge.csproj`
 
@@ -48,7 +49,8 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 - `downloads`: id, book_id, book_title, user_id, status, progress, started_at, completed_at, error_message, created_at
 - `scans`: id, status, started_at, completed_at, books_added, output, error_message
 - `audible_account_settings`: account_id (TEXT PK), added_by_user_id (INTEGER), auto_download (INTEGER DEFAULT 0) — created via `_migrate_db`; tracks which web UI user added each Audible account and whether auto-download is enabled
-- `system_settings`: key (TEXT PK), value (TEXT DEFAULT '') — created via `_migrate_db`; currently holds one row: `last_auto_download_at` (ISO timestamp of the last auto-download run, empty string when never run)
+- `system_settings`: key (TEXT PK), value (TEXT DEFAULT '') — created via `_migrate_db`; holds `last_auto_download_at` (ISO timestamp of the last auto-download run, empty string when never run) and the `chaptarr_*` keys (see Chaptarr integration below)
+- `chaptarr_imports`: id, book_id (ASIN), book_title, status (running/complete/error/skipped), matched_by (`asin`/`folder_scan`), command_id (Chaptarr's command id), file_path (as Chaptarr sees it), message, user_id, created_at, completed_at — created by `Base.metadata.create_all` from `models/chaptarr.py`
 
 ## Permissions system
 - `DEFAULT_PERMISSIONS` in `models/user.py`: all flags `true` except `can_remove_downloads = false`
@@ -150,6 +152,51 @@ docker compose up --build
 - Duplicate active downloads blocked with 409
 - **Auto-download after scan** (`_auto_download_if_enabled`): called via `asyncio.create_task` after every successful scan. Reads `audible_account_settings` for accounts with `auto_download=1`; enforces a 30-minute global cooldown via `system_settings.last_auto_download_at`; for each opted-in account fetches `not_liberated` book IDs and queues them as individual downloads under the admin user, skipping any already active.
 
+## Chaptarr integration (`backend/app/services/chaptarr.py`, `backend/app/api/chaptarr.py`)
+Pushes downloaded audiobooks into a self-hosted [Chaptarr](https://github.com/Chaptarr/chaptarr) (a Readarr fork for audiobook/eBook libraries) so they land in its library **even when nothing is monitoring for them**.
+
+### Matching
+Chaptarr's canonical provider prefix for Amazon/Audible ids is `az:`, and every Libation book is keyed by its Audible ASIN, so no fuzzy matching is needed:
+- `GET /api/v1/book/lookup?term=az:{ASIN}&mediaType=audiobook` → `BookResource` with `foreignBookId`, `author.foreignAuthorId`, `editions[].foreignEditionId`
+- `_pick_edition_id` prefers the edition whose ASIN equals the one we downloaded, then the monitored one, then the first
+- A hit without `foreignAuthorId` counts as a miss — `ManualImport` cannot work without it
+
+### Import
+`POST /api/v1/command` with:
+```json
+{"name": "ManualImport", "importMode": "auto", "replaceExistingFiles": false,
+ "files": [{"path": "...", "foreignAuthorId": "az:...", "foreignBookId": "az:...",
+            "foreignEditionId": "az:...", "selectionSource": 1}]}
+```
+`selectionSource: 1` is `ManualImportSelectionSource.UserMetadataSuggestion`. It routes the request through Chaptarr's `MaterializeUserSelectedEditionAsync` / `AddAuthorAsync` path, which creates the author, book and edition from provider metadata instead of requiring an existing library entry — **this is what makes an unmonitored book importable**.
+
+**Fallback**: when Chaptarr's metadata server doesn't know the ASIN, the containing folder is sent to `DownloadedBooksScan` with `requireDefaultRootFolderForMissingAuthors: true`, letting Chaptarr match from tags/filenames and still create missing authors.
+
+Commands are polled via `GET /api/v1/command/{id}` every 2s for up to 5 minutes. Auth is the `X-Api-Key` header. `_summarize()` maps Chaptarr's `CommandStatus`/`CommandResult` onto our status: `Result` stays `Unknown` until a handler says otherwise and `Complete()` promotes it to `Successful`, so only an explicit `Unsuccessful` is treated as failure. **Caveat**: `ManualImport` never reports `Unsuccessful` — it completes even when every file was rejected — so a `complete` row means Chaptarr *ran* the import, not that it accepted the file. Chaptarr's own History view has the per-file detail.
+
+### Finding the downloaded file
+`libation.get_audio_file_paths(book_id)` reads Libation's `FileLocationsV2.json` (`LibationFileManager.FilePathCache`) at `{LIBATION_CONFIG}/FileLocationsV2.json`. Shape: `{"Dictionary": {"<ASIN>": [{"Id","FileType","Path"}]}}`, where `FileType` is the `LibationFileManager.FileType` ordinal (`Unknown=0, Audio=1, AAXC=2, PDF=3, Zip=4, Cue=5`) — non-audio entries are dropped. Falls back to globbing `AUDIOBOOKS_DIR` for `*{ASIN}*` when the cache has no usable entry (Libation's default file template embeds the ASIN).
+
+### Settings (`system_settings` keys)
+`chaptarr_enabled`, `chaptarr_url`, `chaptarr_api_key`, `chaptarr_import_mode` (`auto`/`copy`/`move`), `chaptarr_auto_import`, `chaptarr_path_from`, `chaptarr_path_to`. Seeded by `_migrate_db` from `SETTING_KEYS`. `path_from` → `path_to` rewrites the path prefix when the shared volume is mounted differently in the two containers. `import_mode` only matters when the file sits *outside* a Chaptarr root folder; inside one, Chaptarr treats it as an existing file and links it in place.
+
+### API endpoints
+- `GET/PUT /api/chaptarr/settings` — admin-only; the API key is never returned (`api_key_set: bool` instead). On PUT, an omitted `api_key` keeps the stored value, `""` clears it
+- `GET /api/chaptarr/status` — any authenticated user; `{enabled, configured}` only, so the Liberate page can decide whether to offer the action without exposing the URL or key
+- `POST /api/chaptarr/test` — admin-only; returns Chaptarr's app name, version and root folders
+- `POST /api/chaptarr/import` — body `{book_ids: [...]}`; requires `can_download`; 202 with one `running` record per book, batch worked sequentially in the background
+- `GET /api/chaptarr/imports` — recent attempts (default 50)
+
+### Hook
+`downloads.py::_run_download` fires `chaptarr.import_after_download()` after a successful download. It no-ops unless `enabled` *and* `auto_import` *and* `configured`. All failures are recorded on the `chaptarr_imports` row — a bad Chaptarr config can never break a download.
+
+### UI
+- `frontend/src/components/settings/ChaptarrSection.tsx` — admin-only Settings card: enable toggle, URL, API key (write-only), auto-import toggle, import mode, path mapping, Test connection, and a Recent imports list that polls every 3s while anything is running
+- Liberate page Multi Select mode gains a **Send to Chaptarr** bulk action, shown only when `GET /api/chaptarr/status` says it's usable
+
+### Test
+`scripts/test-chaptarr.py` runs the whole flow against an in-process stub Chaptarr — no test framework, only `backend/requirements.txt`. Run with `PYTHONPATH=backend python scripts/test-chaptarr.py`. Wired into `.github/workflows/docker-ghcr.yml` as the `chaptarr` job, which gates `merge`.
+
 ## User management (`backend/app/api/users.py`)
 - Admin-only routes behind `require_admin` dependency
 - `GET /api/users`, `POST /api/users`, `PATCH /api/users/{id}`, `DELETE /api/users/{id}`
@@ -168,7 +215,7 @@ docker compose up --build
 - **ApiDocsSection in Settings**: two links to FastAPI's built-in `/docs` (Swagger UI) and `/redoc`; admin-only, below LogsSection
 
 ## Logging (`backend/app/services/logger.py`)
-- Writes to `/config/logs/libation-web.log` (on the mapped `/config` volume — survives container restarts)
+- Writes to `{LIBATION_CONFIG}/logs/libation-web.log` — `/config/logs/libation-web.log` in the container (on the mapped `/config` volume, so it survives restarts). `log_file_path()` is the single source of truth; `api/logs.py` reads it rather than naming the path again
 - `RotatingFileHandler`: 5 MB per file, 3 backups (`libation-web.log`, `.1`, `.2`, `.3`)
 - Log format: `YYYY-MM-DD HH:MM:SS [LEVEL] message`
 - Logged events:
@@ -212,6 +259,7 @@ docker compose up --build
 - **Phase 7 seed fix** (complete): `_seed_admin` in `main.py` rewritten to use raw SQL (`conn.execute()`) instead of ORM (`db.add(User(...))`). Root cause: `_migrate_db` calls `db.connection()` which acquires a DBAPI connection and begins a transaction; if no migrations run, no `db.commit()` is called, leaving the session with a dangling connection. The subsequent ORM `db.commit()` in the old `_seed_admin` did not reliably persist the row. The raw SQL approach shares the same connection path as `_migrate_db` and works correctly. Also added try/except with explicit logger.error logging and flush=True on print so failures are never silent.
 - **Phase 7** (complete): LibationBridge ASP.NET Core 10 sidecar replaces subprocess calls for downloads and scans. New `libation-bridge/` directory with `LibationBridge.csproj` and `Program.cs`. Bridge references Libation DLLs at `/usr/lib/libation/` directly via `AssemblyResolve` hook + `[MethodImpl(NoInlining)]` isolation. Real `StreamingProgressChanged` events (0–100%) replace fake 5/95 progress jumps from stdout parsing. Dockerfile gains a `bridge-builder` stage (Stage 2) that installs the Libation `.deb` for compile-time DLL resolution then publishes a self-contained single-file binary. Entrypoint pre-seeds `/config/Libation/appsettings.json` with `{"LibationFiles":"/config"}` so the bridge's Libation scaffolding uses the same config path as `libationcli`. `cli.py` rewritten to route downloads and scans through bridge HTTP; login stays PTY subprocess. `BRIDGE_URL` added to `config.py`.
 - **Phase 8** (complete): Operational hardening — auto-download, default-credentials UX, log viewer, and sidebar polish. Per-Audible-account auto-download toggle stored in new `audible_account_settings` table; `_auto_download_if_enabled()` fires after every successful scan with a 30-min global cooldown via `system_settings`. OAuth flow auto-triggers a library scan and shows a dismissable info banner on completion. `GET /api/auth/default-credentials` detects factory-default credentials; SettingsPage shows amber warning banner + `UpdateCredentialsSection` (change username + password in one step, then signs out). `POST /api/auth/change-username` added. Logs API (`GET /api/logs`, `GET /api/logs/download`) + `LogsSection` embedded in Settings (level filter, line count, auto-refresh, download). `ApiDocsSection` in Settings links to `/docs` and `/redoc`. Sidebar nav renamed "Accounts" → "Audible Accounts". `UserAdminResponse.created_at` made Optional to handle NULL rows from early-seeded users. `AccountResponse` gains `auto_download` and `added_by_user_id` fields.
+- **Phase 9** (complete): Chaptarr import. Downloaded audiobooks are pushed into a self-hosted Chaptarr library, matched by Audible ASIN via Chaptarr's `az:` provider prefix. New `services/chaptarr.py`, `api/chaptarr.py`, `models/chaptarr.py`, `schemas/chaptarr.py`; new `chaptarr_imports` table and `chaptarr_*` `system_settings` keys. Uses Chaptarr's `ManualImport` command with `selectionSource: 1` (UserMetadataSuggestion) so books import even when Chaptarr isn't monitoring for them, falling back to `DownloadedBooksScan` when the ASIN is unknown upstream. `libation.get_audio_file_paths()` reads Libation's `FileLocationsV2.json` to find what was actually written. Auto-import fires after every successful download; a **Send to Chaptarr** bulk action on the Liberate page covers on-demand pushes. `scripts/test-chaptarr.py` exercises the flow against a stub Chaptarr and gates CI.
 - **Phase 8 Extended** (complete): Owner name editable input added directly to AccountsPage for accounts the logged-in user added (`added_by_user_id === user.id`); saves via `PATCH /api/auth/me` on blur/Enter; amber banner shown when `owner_name` is unset. "Purchased" filter tab added to Liberate page between All and Audible Plus; filters on `LibraryBooks.IsAudiblePlus=0` in both `get_liberate_books()` and `get_liberate_book_ids()`.
 
 ## Pre-push sanitization (REQUIRED before any `git push`)
@@ -226,9 +274,10 @@ credentials remain, no real Audible accounts, no real library data, no downloads
 |-------------|--------|
 | `./config/AccountsSettings.json` | Real Audible OAuth tokens |
 | `./config/LibationContext.db` | Real library data tied to a real Audible account |
+| `./config/FileLocationsV2.json` | Libation's ASIN → file-path cache for a real library |
 | `./config/SearchEngine/` | Lucene index built from real library |
 | `./config/logs/` | Log files that may contain real email addresses |
-| `./data/app.db` | Real user accounts and sessions; container recreates it with default `admin/admin` on next start |
+| `./data/app.db` | Real user accounts and sessions, plus the Chaptarr URL and API key in `system_settings`; container recreates it with default `admin/admin` on next start |
 | `./audiobooks/` (contents) | Downloaded audiobook files — purge all content, keep the directory |
 
 ### Inside the running container (ephemeral, non-volume)

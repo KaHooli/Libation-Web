@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -515,3 +516,112 @@ def _legacy_library(search, sort_by, sort_dir, page, page_size) -> dict:
         return {"books": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size}
     except Exception as e:
         return {"books": [], "total": 0, "page": page, "page_size": page_size, "empty_reason": str(e)}
+
+
+# ── Downloaded file locations ─────────────────────────────────────────────────
+#
+# Libation records where it wrote each file in a JSON cache next to its config
+# (`LibationFileManager.FilePathCache`). Reading that is far more reliable than
+# guessing at the file naming template, which is user-configurable.
+#
+# Shape:  {"Dictionary": {"<ASIN>": [{"Id","FileType","Path"}, ...]}}
+# FileType is the `LibationFileManager.FileType` enum. Newtonsoft writes it as
+# its ordinal, but tolerate the name too in case that ever changes.
+
+_FILE_CACHE_NAMES = ("FileLocationsV2.json", "FileLocations.json")
+_AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".m4b", ".mp3", ".mp4", ".ogg"}
+_FILE_TYPE_AUDIO = (1, "Audio", "audio")
+
+
+def _file_cache_path() -> Optional[Path]:
+    config = Path(settings.LIBATION_CONFIG)
+    for name in _FILE_CACHE_NAMES:
+        p = config / name
+        if p.exists():
+            return p
+    return None
+
+
+def _cache_entries(raw: dict, book_id: str) -> list[dict]:
+    """Pull the entry list for one book id out of the cache, whatever it's nested under."""
+    if not isinstance(raw, dict):
+        return []
+    buckets = [raw.get("Dictionary"), raw]
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        for key, entries in bucket.items():
+            if key.lower() == book_id.lower() and isinstance(entries, list):
+                return [e for e in entries if isinstance(e, dict)]
+    return []
+
+
+def _is_audio(entry: dict) -> bool:
+    if entry.get("FileType") in _FILE_TYPE_AUDIO:
+        return True
+    path = entry.get("Path")
+    return bool(path) and Path(path).suffix.lower() in _AUDIO_EXTENSIONS
+
+
+def get_audio_file_paths(book_id: str) -> list[str]:
+    """Absolute paths of the audio files Libation has written for a book.
+
+    Returns [] when the book has never been downloaded (or the files have since
+    been deleted — paths that no longer exist are dropped).
+    """
+    cache = _file_cache_path()
+    paths: list[str] = []
+    if cache is not None:
+        try:
+            raw = json.loads(cache.read_text(encoding="utf-8-sig"))
+        except Exception:
+            raw = {}
+        for entry in _cache_entries(raw, book_id):
+            path = entry.get("Path")
+            if path and _is_audio(entry) and Path(path).is_file():
+                paths.append(str(path))
+
+    if not paths:
+        paths = _scan_books_dir_for(book_id)
+
+    # Stable order so repeated imports send the same file list.
+    return sorted(dict.fromkeys(paths))
+
+
+def _scan_books_dir_for(book_id: str) -> list[str]:
+    """Fallback for books downloaded before the cache existed (or after it was pruned).
+
+    Libation's default file template embeds the ASIN in the file name, so a
+    bounded glob over the books directory usually finds it.
+    """
+    books_dir = Path(settings.AUDIOBOOKS_DIR)
+    if not book_id or not books_dir.is_dir():
+        return []
+    try:
+        return [
+            str(p) for p in books_dir.rglob(f"*{book_id}*")
+            if p.is_file() and p.suffix.lower() in _AUDIO_EXTENSIONS
+        ]
+    except OSError:
+        return []
+
+
+def get_book_metadata(book_id: str) -> Optional[dict]:
+    """Title/authors/narrators/series for one book — the details sent to Chaptarr."""
+    if not db_exists():
+        return None
+    try:
+        conn = _connect()
+        sc = _schema(conn)
+        if "Books" not in sc or not _is_v13(sc):
+            conn.close()
+            return None
+        selects = _v13_selects(include_description=False)
+        row = conn.execute(
+            f"SELECT {', '.join(selects)} FROM Books b WHERE b.AudibleProductId = ?",
+            (book_id,),
+        ).fetchone()
+        conn.close()
+        return _v13_row_to_book(row) if row else None
+    except Exception:
+        return None

@@ -122,3 +122,51 @@ export const settingsApi = {
   getStats: () =>
     api.get("/settings/stats"),
 };
+
+// Chaptarr API
+export interface ChaptarrSettingsData {
+  enabled: boolean;
+  url: string;
+  import_mode: "auto" | "copy" | "move";
+  auto_import: boolean;
+  path_from: string;
+  path_to: string;
+  api_key_set: boolean;
+}
+
+export interface ChaptarrImportRecord {
+  id: number;
+  book_id: string;
+  book_title: string | null;
+  status: "running" | "complete" | "error" | "skipped";
+  matched_by: string | null;
+  command_id: number | null;
+  file_path: string | null;
+  message: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
+export const chaptarrApi = {
+  // Readable by any signed-in user; getSettings is admin-only.
+  status: () =>
+    api.get<{ enabled: boolean; configured: boolean }>("/chaptarr/status"),
+
+  getSettings: () =>
+    api.get<ChaptarrSettingsData>("/chaptarr/settings"),
+
+  // Omit api_key to keep the stored key; send "" to clear it.
+  updateSettings: (patch: Partial<ChaptarrSettingsData> & { api_key?: string }) =>
+    api.put<ChaptarrSettingsData>("/chaptarr/settings", patch),
+
+  test: () =>
+    api.post<{ app_name: string; version: string; root_folders: { id: number | null; path: string | null; name: string | null }[] }>(
+      "/chaptarr/test"
+    ),
+
+  importBooks: (book_ids: string[]) =>
+    api.post<ChaptarrImportRecord[]>("/chaptarr/import", { book_ids }),
+
+  listImports: (limit = 25) =>
+    api.get<ChaptarrImportRecord[]>("/chaptarr/imports", { params: { limit } }),
+};

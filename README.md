@@ -19,6 +19,7 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 - **Downloads page** — active queue with progress bars, failed/completed history, library scan trigger
 - **Multi-user support** — admin can create/disable/delete users; per-user permission flags and 12-hour rolling download caps
 - **User management** — set owner name and link each user to an Audible account
+- **Chaptarr import** — push downloaded audiobooks into a self-hosted [Chaptarr](https://github.com/Chaptarr/chaptarr) library, matched by Audible ASIN so they import even when Chaptarr isn't monitoring for them; automatic after every download, or on demand from the Liberate page
 - **Settings** — Libation config passthrough, session management (list/revoke), 2FA setup, API docs
 - **Auth** — JWT access tokens (15-min) + 60-day httpOnly refresh cookies, optional TOTP 2FA
 - **Dark mode** — persisted to localStorage, toggled from the sidebar
@@ -94,6 +95,45 @@ All LibationCLI command output (scans, downloads, account logins) is written to 
 | In-app viewer | **Settings → Logs** (admin only) — filter by level, adjust line count, download raw file |
 
 Rotates at 5MB, keeps 3 backups (`libation-web.log`, `.1`, `.2`, `.3`). OAuth tokens and login response URLs are never logged.
+
+---
+
+## Sending books to Chaptarr
+
+[Chaptarr](https://github.com/Chaptarr/chaptarr) is a Readarr fork for audiobook and eBook
+libraries. Libation Web UI can hand it each audiobook as soon as Libation finishes writing it.
+
+**Setup**
+
+1. Mount the same audiobooks volume into both containers. If the two mount it at different
+   paths, fill in the path mapping in step 4.
+2. In Chaptarr, add that path as a root folder (**Settings → Media Management → Root Folders**).
+3. In Libation Web UI, go to **Settings → Chaptarr import**, enter Chaptarr's URL and its API key
+   (Chaptarr → **Settings → General → API Key**), then hit **Test connection**.
+4. Optionally set a path mapping — e.g. `/audiobooks` → `/books` — when the volume is mounted at
+   different paths in the two containers. Leave both blank when the paths match.
+5. Turn on **Import automatically after download**, or leave it off and push books by hand.
+
+**How matching works**
+
+Every Libation book carries its Audible ASIN. Chaptarr's canonical prefix for Amazon/Audible ids
+is `az:`, so the ASIN is looked up directly — `GET /api/v1/book/lookup?term=az:{ASIN}` — and the
+work, author and edition ids that come back are sent with the file to Chaptarr's `ManualImport`
+command. Because the metadata is supplied deliberately rather than guessed, Chaptarr creates the
+author and book from provider metadata if they aren't in the library yet; nothing has to be
+monitored in advance.
+
+If Chaptarr's metadata server doesn't know the ASIN, the containing folder is handed to
+`DownloadedBooksScan` instead so Chaptarr can match it from tags and filenames.
+
+Note that a **complete** result means Chaptarr ran the import, not that it necessarily accepted
+the file — Chaptarr's `ManualImport` command reports success even when it rejects a file. If a book
+doesn't turn up in Chaptarr's library, check Chaptarr's own **History** view for the reason.
+
+**Pushing on demand**
+
+On the Liberate page, switch on **Multi Select**, pick the books, and choose **Send to Chaptarr**.
+Results appear under **Settings → Chaptarr import → Recent imports**.
 
 ---
 
