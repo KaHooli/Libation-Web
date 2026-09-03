@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   CheckCircle, XCircle, Loader2, Download, RefreshCw,
-  Headphones, Filter, CheckCheck, RotateCcw, Layers, X, Search, Library,
+  Headphones, Filter, CheckCheck, RotateCcw, Layers, X, Search, Library, ScanSearch,
 } from "lucide-react";
-import { api, chaptarrApi } from "@/lib/api";
+import { api, chaptarrApi, type ChaptarrSkipWhen } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { cn, formatDuration } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,24 @@ type FilterTab = "all" | "purchased" | "audible_plus" | "liberated" | "not_liber
 
 // Matches the server-side cap on ChaptarrImportRequest.book_ids.
 const CHAPTARR_BATCH = 200;
+// …and on ChaptarrCheckRequest.book_ids, which is cheaper per book.
+const CHAPTARR_CHECK_BATCH = 1000;
+
+interface ChaptarrSkipDetail {
+  message: string;
+  reason: "already_in_chaptarr";
+  chaptarr: { has_file: boolean; would_skip: boolean };
+}
+
+/** The 409 body the backend sends when Chaptarr already has the book, or null. */
+function chaptarrSkipOf(err: unknown): ChaptarrSkipDetail | null {
+  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  if (detail && typeof detail === "object"
+      && (detail as ChaptarrSkipDetail).reason === "already_in_chaptarr") {
+    return detail as ChaptarrSkipDetail;
+  }
+  return null;
+}
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All" },
@@ -86,6 +104,7 @@ function BookTile({
   onDownload,
   onMark,
   downloadable,
+  inChaptarr,
 }: {
   book: LiberateBook;
   selected: boolean;
@@ -94,6 +113,8 @@ function BookTile({
   onDownload: () => void;
   onMark: (liberated: boolean) => Promise<void>;
   downloadable: boolean;
+  // Set once a Chaptarr check has run over this book; undefined means unchecked.
+  inChaptarr?: { has_file: boolean; would_skip: boolean };
 }) {
   const [imgFailed, setImgFailed] = useState(false);
   const [queuing, setQueuing] = useState(false);
@@ -140,6 +161,23 @@ function BookTile({
         )}
 
         <StatusBadge status={book.liberate_status} progress={book.download_progress} />
+
+        {inChaptarr && (
+          <div
+            title={inChaptarr.has_file
+              ? "Chaptarr already has a file for this book"
+              : "Chaptarr tracks this book but has no file for it"}
+            className={cn(
+              "absolute bottom-1.5 left-9 flex h-6 items-center gap-1 rounded-full px-1.5 shadow",
+              inChaptarr.would_skip ? "bg-indigo-600" : "bg-slate-500"
+            )}
+          >
+            <Library className="h-3 w-3 text-white" />
+            <span className="text-[10px] font-semibold text-white">
+              {inChaptarr.has_file ? "In Chaptarr" : "Tracked"}
+            </span>
+          </div>
+        )}
 
         {/* Checkbox overlay — visible in multi-select mode */}
         {multiSelectMode && (
@@ -208,6 +246,14 @@ export function LiberatePage() {
   const [bulkMarking, setBulkMarking] = useState(false);
   const [pushingToChaptarr, setPushingToChaptarr] = useState(false);
   const [chaptarrEnabled, setChaptarrEnabled] = useState(false);
+  const [chaptarrSkips, setChaptarrSkips] = useState(false);
+  const [skipWhen, setSkipWhen] = useState<ChaptarrSkipWhen>("has_file");
+  const [checkingChaptarr, setCheckingChaptarr] = useState(false);
+  // The book a Chaptarr skip just blocked, so "Download anyway" has a target.
+  const [skippedByChaptarr, setSkippedByChaptarr] = useState<LiberateBook | null>(null);
+  // book_id → what Chaptarr said, for books a check has actually covered.
+  const [chaptarrHas, setChaptarrHas] =
+    useState<Record<string, { has_file: boolean; would_skip: boolean }>>({});
   const [notice, setNotice] = useState("");
   const [selectingAll, setSelectingAll] = useState(false);
   const [bulkStatus, setBulkStatus] = useState<"idle" | "running" | "done" | "error">("idle");
@@ -224,7 +270,11 @@ export function LiberatePage() {
 
   useEffect(() => {
     chaptarrApi.status()
-      .then(r => setChaptarrEnabled(r.data.enabled && r.data.configured))
+      .then(r => {
+        setChaptarrEnabled(r.data.enabled && r.data.configured);
+        setChaptarrSkips(r.data.skip_existing);
+        setSkipWhen(r.data.skip_when);
+      })
       .catch(() => setChaptarrEnabled(false));
   }, []);
 
@@ -289,14 +339,20 @@ export function LiberatePage() {
     }
   };
 
-  const handleDownloadOne = async (book: LiberateBook) => {
+  const handleDownloadOne = async (book: LiberateBook, force = false) => {
+    setError(""); setNotice("");
     try {
-      await api.post("/downloads", { book_id: book.book_id, book_title: book.title });
+      await api.post("/downloads", { book_id: book.book_id, book_title: book.title, force });
       await loadBooks();
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      const skip = chaptarrSkipOf(err);
       if (typeof detail === "object" && detail && "resets_at" in detail) {
         setError(`Download cap reached. Resets at ${new Date((detail as { resets_at: string }).resets_at).toLocaleTimeString()}`);
+      } else if (skip) {
+        setChaptarrHas(m => ({ ...m, [book.book_id]: skip.chaptarr }));
+        setSkippedByChaptarr(book);
+        setNotice(skip.message);
       } else {
         setError(typeof detail === "string" ? detail : "Failed to queue download.");
       }
@@ -315,11 +371,26 @@ export function LiberatePage() {
 
   const confirmSelected = async () => {
     if (selected.size === 0) return;
+    setError(""); setNotice("");
     const toQueue = books.filter(b => selected.has(b.book_id));
+    const skipped: Record<string, { has_file: boolean; would_skip: boolean }> = {};
     for (const book of toQueue) {
       try {
         await api.post("/downloads", { book_id: book.book_id, book_title: book.title });
-      } catch { /* individual failures are silent; cap 429 stops the loop */ break; }
+      } catch (err: unknown) {
+        // Chaptarr already has this one — note it and carry on down the list.
+        const skip = chaptarrSkipOf(err);
+        if (skip) {
+          skipped[book.book_id] = skip.chaptarr;
+          continue;
+        }
+        /* anything else (a cap 429, a server error) stops the loop */ break;
+      }
+    }
+    if (Object.keys(skipped).length > 0) {
+      setChaptarrHas(m => ({ ...m, ...skipped }));
+      const n = Object.keys(skipped).length;
+      setNotice(`Skipped ${n} book${n !== 1 ? "s" : ""} Chaptarr already has.`);
     }
     setSelected(new Set());
     await loadBooks();
@@ -356,6 +427,35 @@ export function LiberatePage() {
     ));
     setSelected(new Set());
     setBulkMarking(false);
+  };
+
+  const checkAgainstChaptarr = async () => {
+    if (selected.size === 0 || checkingChaptarr) return;
+    setCheckingChaptarr(true);
+    setError(""); setNotice("");
+    const ids = Array.from(selected);
+    try {
+      const found: Record<string, { has_file: boolean; would_skip: boolean }> = {};
+      for (let i = 0; i < ids.length; i += CHAPTARR_CHECK_BATCH) {
+        const { data } = await chaptarrApi.checkBooks(ids.slice(i, i + CHAPTARR_CHECK_BATCH));
+        for (const r of data.results) {
+          if (r.in_chaptarr) found[r.book_id] = { has_file: r.has_file, would_skip: r.would_skip };
+        }
+      }
+      setChaptarrHas(m => ({ ...m, ...found }));
+      const hits = Object.keys(found).length;
+      setNotice(
+        hits === 0
+          ? `Chaptarr has none of the ${ids.length} selected book${ids.length !== 1 ? "s" : ""}.`
+          : `Chaptarr already has ${hits} of the ${ids.length} selected book${ids.length !== 1 ? "s" : ""}.` +
+            (chaptarrSkips ? " Those will not be downloaded from Audible." : "")
+      );
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail || "Could not check against Chaptarr.");
+    } finally {
+      setCheckingChaptarr(false);
+    }
   };
 
   const sendToChaptarr = async () => {
@@ -406,7 +506,29 @@ export function LiberatePage() {
   return (
     <div className="space-y-4">
       {error && <Alert variant="error" className="mb-2">{error}<button className="ml-2 underline text-xs" onClick={() => setError("")}>dismiss</button></Alert>}
-      {notice && <Alert variant="info" className="mb-2">{notice}<button className="ml-2 underline text-xs" onClick={() => setNotice("")}>dismiss</button></Alert>}
+      {notice && (
+        <Alert variant="info" className="mb-2">
+          {notice}
+          {skippedByChaptarr && (
+            <button
+              className="ml-2 underline text-xs font-medium"
+              onClick={() => {
+                const book = skippedByChaptarr;
+                setSkippedByChaptarr(null);
+                handleDownloadOne(book, true);
+              }}
+            >
+              Download anyway
+            </button>
+          )}
+          <button
+            className="ml-2 underline text-xs"
+            onClick={() => { setNotice(""); setSkippedByChaptarr(null); }}
+          >
+            dismiss
+          </button>
+        </Alert>
+      )}
 
       {/* Bulk liberate banner */}
       {bulkStatus === "running" && (
@@ -535,14 +657,25 @@ export function LiberatePage() {
                     <RotateCcw className="h-3.5 w-3.5" /> Mark Not Downloaded
                   </Button>
                   {chaptarrEnabled && (
-                    <Button
-                      size="sm"
-                      onClick={sendToChaptarr}
-                      loading={pushingToChaptarr}
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white"
-                    >
-                      <Library className="h-3.5 w-3.5" /> Send to Chaptarr
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={checkAgainstChaptarr}
+                        loading={checkingChaptarr}
+                        title="Ask Chaptarr which of these it already has"
+                      >
+                        <ScanSearch className="h-3.5 w-3.5" /> Check Chaptarr
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={sendToChaptarr}
+                        loading={pushingToChaptarr}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                      >
+                        <Library className="h-3.5 w-3.5" /> Send to Chaptarr
+                      </Button>
+                    </>
                   )}
                 </>
               )}
@@ -632,6 +765,7 @@ export function LiberatePage() {
               onDownload={() => handleDownloadOne(book)}
               onMark={(liberated) => handleMark(book, liberated)}
               downloadable={canDownload && !isCapExhausted && book.liberate_status === "not_liberated"}
+              inChaptarr={chaptarrHas[book.book_id]}
             />
           ))}
         </div>

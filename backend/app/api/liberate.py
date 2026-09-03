@@ -15,7 +15,9 @@ from ..schemas.liberate import LiberateResponse, DownloadCapStatus
 from ..schemas.downloads import ScanResponse
 from ..services import libation as lib_svc
 from ..services import cli as cli_svc
+from ..services import chaptarr as chaptarr_svc
 from .auth import get_current_user
+from .downloads import _run_download
 
 router = APIRouter(prefix="/api/liberate", tags=["liberate"])
 
@@ -152,6 +154,65 @@ async def _run_liberate_all(scan_id: int) -> None:
             db.commit()
 
 
+async def _run_liberate_checked(
+    scan_id: int, cfg: chaptarr_svc.ChaptarrConfig, user_id: int
+) -> None:
+    """Download every unliberated book Chaptarr doesn't already have, one at a time.
+
+    The blanket `libationcli liberate` can't be filtered — it decides for itself
+    what to fetch — so when the Chaptarr skip-check is on we enumerate the books
+    ourselves and queue them individually instead.
+    """
+    with SessionLocal() as db:
+        scan = db.get(Scan, scan_id)
+        if scan:
+            scan.started_at = datetime.now(timezone.utc)
+            db.commit()
+
+    queued = 0
+    skipped: dict[str, dict] = {}
+    try:
+        book_ids = lib_svc.get_liberate_book_ids(filter_status="not_liberated")
+        wanted, skipped = await chaptarr_svc.filter_new_books(cfg, book_ids)
+        for book_id, match in skipped.items():
+            chaptarr_svc.record_skipped_download(book_id, match, user_id=user_id)
+
+        for book_id in wanted:
+            with SessionLocal() as db:
+                already = db.query(Download).filter(
+                    Download.book_id == book_id,
+                    Download.status.in_(["queued", "running"]),
+                ).first()
+                if already:
+                    continue
+                dl = Download(book_id=book_id, user_id=user_id, status="queued")
+                db.add(dl)
+                db.commit()
+                db.refresh(dl)
+                dl_id = dl.id
+            await _run_download(dl_id, book_id)
+            queued += 1
+
+        summary = (
+            f"Downloaded {queued} book(s). "
+            f"Skipped {len(skipped)} already in Chaptarr."
+        )
+        status_value, error = "complete", None
+    except Exception as e:  # noqa: BLE001 — the Scan row is the only report there is
+        # Keep `queued`: books already downloaded before the failure still count.
+        summary, status_value, error = str(e)[:4000], "error", str(e)[-500:]
+
+    with SessionLocal() as db:
+        scan = db.get(Scan, scan_id)
+        if scan:
+            scan.status = status_value
+            scan.completed_at = datetime.now(timezone.utc)
+            scan.books_added = queued
+            scan.output = summary
+            scan.error_message = error
+            db.commit()
+
+
 @router.post("/download-all", response_model=ScanResponse, status_code=202)
 def download_all(
     db: Session = Depends(get_db),
@@ -171,5 +232,10 @@ def download_all(
     db.add(scan)
     db.commit()
     db.refresh(scan)
-    asyncio.create_task(_run_liberate_all(scan.id))
+
+    cfg = chaptarr_svc.load_config(db)
+    if cfg.skip_check_active:
+        asyncio.create_task(_run_liberate_checked(scan.id, cfg, current_user.id))
+    else:
+        asyncio.create_task(_run_liberate_all(scan.id))
     return scan

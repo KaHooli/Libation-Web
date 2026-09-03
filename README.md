@@ -20,6 +20,7 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 - **Multi-user support** — admin can create/disable/delete users; per-user permission flags and 12-hour rolling download caps
 - **User management** — set owner name and link each user to an Audible account
 - **Chaptarr import** — push downloaded audiobooks into a self-hosted [Chaptarr](https://github.com/Chaptarr/chaptarr) library, matched by Audible ASIN so they import even when Chaptarr isn't monitoring for them; automatic after every download, or on demand from the Liberate page
+- **Skip what Chaptarr already has** — optionally check Chaptarr's library before pulling a book from Audible, so nothing is downloaded twice
 - **Settings** — Libation config passthrough, session management (list/revoke), 2FA setup, API docs
 - **Auth** — JWT access tokens (15-min) + 60-day httpOnly refresh cookies, optional TOTP 2FA
 - **Dark mode** — persisted to localStorage, toggled from the sidebar
@@ -133,7 +134,29 @@ doesn't turn up in Chaptarr's library, check Chaptarr's own **History** view for
 **Pushing on demand**
 
 On the Liberate page, switch on **Multi Select**, pick the books, and choose **Send to Chaptarr**.
-Results appear under **Settings → Chaptarr import → Recent imports**.
+Results appear under **Settings → Chaptarr import → Recent activity**.
+
+**Not downloading what Chaptarr already has**
+
+Turn on **Skip books Chaptarr already has** in the same settings card and every download —
+a single book, an auto-download after a scan, or **Download All** — first asks Chaptarr whether
+it already holds the book, and skips it if so. Two things can count as "already has it":
+
+| Setting | Skips when |
+|---------|-----------|
+| **It has the file** (default) | Chaptarr holds an audiobook file for the book |
+| **It's in the library** | Chaptarr knows the book at all, file or not |
+
+Matching is by Audible ASIN against every id Chaptarr records for a book — the work id, the
+edition ids, and each edition's ASIN — so no title guessing is involved. Only Chaptarr's
+**audiobook** library counts: owning the eBook never stops the audiobook downloading.
+
+If Chaptarr is unreachable the download goes ahead anyway — a metadata server being down is
+not a reason to lose an audiobook. Every skip is listed under **Settings → Chaptarr import →
+Recent activity**, and the download button on a skipped book offers **Download anyway**.
+
+To see what Chaptarr has without changing anything, use **Multi Select → Check Chaptarr** on the
+Liberate page; it reports the answer and badges the affected books whether or not skipping is on.
 
 ---
 

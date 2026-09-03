@@ -131,7 +131,28 @@ export interface ChaptarrSettingsData {
   auto_import: boolean;
   path_from: string;
   path_to: string;
+  skip_existing: boolean;
+  skip_when: ChaptarrSkipWhen;
   api_key_set: boolean;
+}
+
+export type ChaptarrSkipWhen = "has_file" | "in_library";
+
+export interface ChaptarrStatusData {
+  enabled: boolean;
+  configured: boolean;
+  // True only when downloads are actually being checked against Chaptarr.
+  skip_existing: boolean;
+  skip_when: ChaptarrSkipWhen;
+}
+
+export interface ChaptarrBookCheck {
+  book_id: string;
+  in_chaptarr: boolean;
+  has_file: boolean;
+  title: string | null;
+  chaptarr_book_id: number | null;
+  would_skip: boolean;
 }
 
 export interface ChaptarrImportRecord {
@@ -149,8 +170,7 @@ export interface ChaptarrImportRecord {
 
 export const chaptarrApi = {
   // Readable by any signed-in user; getSettings is admin-only.
-  status: () =>
-    api.get<{ enabled: boolean; configured: boolean }>("/chaptarr/status"),
+  status: () => api.get<ChaptarrStatusData>("/chaptarr/status"),
 
   getSettings: () =>
     api.get<ChaptarrSettingsData>("/chaptarr/settings"),
@@ -166,6 +186,13 @@ export const chaptarrApi = {
 
   importBooks: (book_ids: string[]) =>
     api.post<ChaptarrImportRecord[]>("/chaptarr/import", { book_ids }),
+
+  // Which of these books does Chaptarr already have? Answers regardless of
+  // whether the skip-check is switched on.
+  checkBooks: (book_ids: string[]) =>
+    api.post<{ skip_existing: boolean; skip_when: ChaptarrSkipWhen; results: ChaptarrBookCheck[] }>(
+      "/chaptarr/check", { book_ids }
+    ),
 
   listImports: (limit = 25) =>
     api.get<ChaptarrImportRecord[]>("/chaptarr/imports", { params: { limit } }),

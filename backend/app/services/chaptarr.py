@@ -32,6 +32,31 @@ When the ASIN is unknown to Chaptarr's metadata server we fall back to
 ``DownloadedBooksScan`` over the containing folder, which lets Chaptarr do its
 own tag/filename matching (also creating missing authors, via
 ``requireDefaultRootFolderForMissingAuthors``).
+
+The traffic also runs the other way: before pulling a book down from Audible we
+can ask Chaptarr whether it already has it, and skip the download if so. The
+library index is read from::
+
+    GET /api/v1/book/paged?mediaType=audiobook&includeUnmonitored=true
+
+falling back to ``GET /api/v1/book?mediaType=audiobook`` on older builds. Every
+Audible id Chaptarr knows for a book — ``asin``, ``audibleASIN``, the
+``az:``-prefixed ``foreignBookId``/``foreignEditionId``, and the same fields on
+each edition — is folded into one ASIN → entry index, cached briefly so a bulk
+check costs a single round trip. ``mediaType=audiobook`` matters: Chaptarr keeps
+separate audiobook and eBook rows, and owning the eBook is no reason to skip the
+audiobook.
+
+Two things can count as "already has it", per ``skip_when``:
+
+``has_file``    Chaptarr has a file on disk for the book (the safe default — a
+                book it merely tracks but has no file for is exactly the one we
+                should still be downloading).
+``in_library``  The book exists in Chaptarr's library at all.
+
+The check always fails open. If Chaptarr is down or answers with nonsense we
+download the book, because a metadata server being unreachable is not a reason
+to lose an audiobook.
 """
 
 import asyncio
@@ -60,15 +85,24 @@ SETTING_KEYS = {
     "chaptarr_auto_import": "0",
     "chaptarr_path_from": "",
     "chaptarr_path_to": "",
+    "chaptarr_skip_existing": "0",
+    "chaptarr_skip_when": "has_file",
 }
 
 IMPORT_MODES = ("auto", "copy", "move")
+SKIP_MODES = ("has_file", "in_library")
 
 MEDIA_TYPE = "audiobook"  # Libation only ever produces audiobooks
 
 _TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
 _COMMAND_POLL_INTERVAL = 2.0
 _COMMAND_POLL_TIMEOUT = 300.0
+
+# The library index is one big response; give it room without hanging a download.
+_LIBRARY_TIMEOUT = httpx.Timeout(connect=5.0, read=120.0, write=30.0, pool=5.0)
+_LIBRARY_PAGE_SIZE = 500
+_LIBRARY_PAGE_LIMIT = 200          # 100k books is far past any real library
+_LIBRARY_CACHE_TTL = 60.0          # seconds — long enough for one bulk sweep
 
 
 @dataclass(frozen=True)
@@ -80,6 +114,8 @@ class ChaptarrConfig:
     auto_import: bool = False
     path_from: str = ""
     path_to: str = ""
+    skip_existing: bool = False
+    skip_when: str = "has_file"
 
     @property
     def configured(self) -> bool:
@@ -89,6 +125,11 @@ class ChaptarrConfig:
     def base_url(self) -> str:
         return self.url.rstrip("/")
 
+    @property
+    def skip_check_active(self) -> bool:
+        """Whether a download should be checked against Chaptarr's library first."""
+        return self.enabled and self.configured and self.skip_existing
+
 
 def load_config(db: Session) -> ChaptarrConfig:
     conn = db.connection()
@@ -97,6 +138,7 @@ def load_config(db: Session) -> ChaptarrConfig:
     ).fetchall()
     raw = {r[0]: r[1] for r in rows}
     mode = (raw.get("chaptarr_import_mode") or "auto").lower()
+    skip_when = (raw.get("chaptarr_skip_when") or "has_file").lower()
     return ChaptarrConfig(
         enabled=raw.get("chaptarr_enabled") == "1",
         url=(raw.get("chaptarr_url") or "").strip(),
@@ -105,6 +147,8 @@ def load_config(db: Session) -> ChaptarrConfig:
         auto_import=raw.get("chaptarr_auto_import") == "1",
         path_from=(raw.get("chaptarr_path_from") or "").strip(),
         path_to=(raw.get("chaptarr_path_to") or "").strip(),
+        skip_existing=raw.get("chaptarr_skip_existing") == "1",
+        skip_when=skip_when if skip_when in SKIP_MODES else "has_file",
     )
 
 
@@ -242,6 +286,240 @@ def _pick_edition_id(book: dict, asin: str) -> str:
         if candidate and (candidate.get("foreignEditionId") or "").strip():
             return candidate["foreignEditionId"].strip()
     return (book.get("foreignEditionId") or "").strip()
+
+
+# ── Library index ("does Chaptarr already have this?") ────────────────────────
+
+@dataclass(frozen=True)
+class LibraryEntry:
+    """One book in Chaptarr's audiobook library, as far as we care about it."""
+
+    chaptarr_book_id: Optional[int]
+    title: str
+    has_file: bool
+
+
+# base_url → (fetched_at, {ASIN: LibraryEntry}). A bulk check walks hundreds of
+# ASINs; without this each one would re-download the whole library index.
+_LIBRARY_CACHE: dict[str, tuple[float, dict[str, LibraryEntry]]] = {}
+
+
+def invalidate_library_cache(cfg: Optional[ChaptarrConfig] = None) -> None:
+    """Drop the cached index — call after anything that changes Chaptarr's library."""
+    if cfg is None:
+        _LIBRARY_CACHE.clear()
+    else:
+        _LIBRARY_CACHE.pop(cfg.base_url, None)
+
+
+def _strip_provider_prefix(value: object) -> str:
+    """``az:B002V0QUOC`` → ``B002V0QUOC``. Non-Audible provider ids return "".
+
+    Chaptarr prefixes provider ids with the provider that issued them, so only
+    the ``az:`` ones are Amazon/Audible ASINs. A bare value is taken at face
+    value — Readarr-facade responses emit ids without the prefix.
+    """
+    if not isinstance(value, str):
+        return ""
+    raw = value.strip()
+    if not raw:
+        return ""
+    provider, sep, rest = raw.partition(":")
+    if sep:
+        return rest.strip().upper() if provider.strip().lower() == "az" else ""
+    return raw.upper()
+
+
+def _asins_of(record: dict) -> set[str]:
+    """Every Audible ASIN Chaptarr associates with one book resource."""
+    found: set[str] = set()
+
+    def take(value: object) -> None:
+        asin = _strip_provider_prefix(value)
+        # Audible ASINs are 10 chars; the guard keeps slugs and numeric row ids
+        # from colliding with a real ASIN in the index.
+        if len(asin) == 10 and asin.isalnum():
+            found.add(asin)
+
+    for key in ("asin", "audibleASIN", "foreignBookId", "foreignEditionId"):
+        take(record.get(key))
+
+    for edition in record.get("editions") or []:
+        if not isinstance(edition, dict):
+            continue
+        for key in ("asin", "audibleASIN", "foreignEditionId"):
+            take(edition.get(key))
+        for extra in edition.get("asins") or []:
+            take(extra)
+
+    return found
+
+
+def _record_has_file(record: dict) -> bool:
+    if record.get("hasFiles"):
+        return True
+    stats = record.get("statistics")
+    if isinstance(stats, dict) and (stats.get("bookFileCount") or 0) > 0:
+        return True
+    return any(
+        isinstance(e, dict) and (e.get("bookFileCount") or 0) > 0
+        for e in record.get("editions") or []
+    )
+
+
+def _index_records(records: list, index: dict[str, LibraryEntry]) -> None:
+    """Fold Chaptarr book resources into the ASIN index, in place."""
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        # Chaptarr keeps separate audiobook and eBook rows. Owning the eBook is
+        # no reason to skip the audiobook, so drop anything explicitly an eBook.
+        # A record with no mediaType at all predates the split — keep it.
+        media_type = (record.get("mediaType") or "").strip().lower()
+        if media_type and media_type != MEDIA_TYPE:
+            continue
+        entry = LibraryEntry(
+            chaptarr_book_id=record.get("id") if isinstance(record.get("id"), int) else None,
+            title=(record.get("title") or "").strip(),
+            has_file=_record_has_file(record),
+        )
+        for asin in _asins_of(record):
+            # A book with a file wins over one without: the same ASIN can show up
+            # on more than one row (a re-add, a split edition), and "we have it"
+            # is the answer that matters.
+            existing = index.get(asin)
+            if existing is None or (entry.has_file and not existing.has_file):
+                index[asin] = entry
+
+
+async def _fetch_paged(cfg: ChaptarrConfig, index: dict[str, LibraryEntry]) -> bool:
+    """Page through ``/book/paged``. Returns False if this Chaptarr has no such route."""
+    offset = 0
+    for _ in range(_LIBRARY_PAGE_LIMIT):
+        resp = await _request(
+            cfg, "GET",
+            f"/book/paged?offset={offset}&pageSize={_LIBRARY_PAGE_SIZE}"
+            f"&includeUnmonitored=true&mediaType={MEDIA_TYPE}",
+            timeout=_LIBRARY_TIMEOUT,
+        )
+        try:
+            body = resp.json()
+        except ValueError:
+            return False
+        if not isinstance(body, dict) or not isinstance(body.get("records"), list):
+            return False
+        records = body["records"]
+        _index_records(records, index)
+        offset += len(records)
+        if len(records) < _LIBRARY_PAGE_SIZE or offset >= (body.get("totalCount") or 0):
+            return True
+    return True
+
+
+async def fetch_library(cfg: ChaptarrConfig) -> dict[str, LibraryEntry]:
+    """Chaptarr's whole audiobook library, indexed by every ASIN it knows for it.
+
+    Cached for ``_LIBRARY_CACHE_TTL`` seconds per Chaptarr instance so checking a
+    few hundred books costs one round trip rather than a few hundred.
+    """
+    cached = _LIBRARY_CACHE.get(cfg.base_url)
+    if cached and (time.monotonic() - cached[0]) < _LIBRARY_CACHE_TTL:
+        return cached[1]
+
+    index: dict[str, LibraryEntry] = {}
+    paged_worked = False
+    try:
+        paged_worked = await _fetch_paged(cfg, index)
+    except ChaptarrError:
+        # Older Chaptarr builds have no /book/paged. Fall through to the index
+        # route rather than treating a missing endpoint as an outage.
+        pass
+
+    if not paged_worked:
+        # Whatever pages did land are half an answer; the index route returns
+        # the whole library, so start it from scratch.
+        index.clear()
+        resp = await _request(
+            cfg, "GET", f"/book?mediaType={MEDIA_TYPE}", timeout=_LIBRARY_TIMEOUT
+        )
+        try:
+            records = resp.json()
+        except ValueError as exc:
+            raise ChaptarrError("Chaptarr's book list was not JSON") from exc
+        if not isinstance(records, list):
+            raise ChaptarrError("Chaptarr's book list was not a list of books")
+        _index_records(records, index)
+
+    _LIBRARY_CACHE[cfg.base_url] = (time.monotonic(), index)
+    return index
+
+
+def _counts_as_owned(entry: LibraryEntry, cfg: ChaptarrConfig) -> bool:
+    return entry.has_file if cfg.skip_when == "has_file" else True
+
+
+async def check_books(cfg: ChaptarrConfig, book_ids: list[str]) -> dict[str, dict]:
+    """What Chaptarr knows about each ASIN, keyed by the ASIN we were asked about.
+
+    Every requested id gets an entry. ``would_skip`` answers the only question the
+    download paths care about, honouring ``skip_when``. Raises ``ChaptarrError``
+    if the library can't be read — callers that must not block on Chaptarr use
+    ``filter_new_books``, which swallows that.
+    """
+    index = await fetch_library(cfg)
+    results: dict[str, dict] = {}
+    for book_id in book_ids:
+        asin = (book_id or "").strip().upper()
+        entry = index.get(asin)
+        results[book_id] = {
+            "book_id": book_id,
+            "in_chaptarr": entry is not None,
+            "has_file": bool(entry and entry.has_file),
+            "title": entry.title if entry else None,
+            "chaptarr_book_id": entry.chaptarr_book_id if entry else None,
+            "would_skip": bool(entry and _counts_as_owned(entry, cfg)),
+        }
+    return results
+
+
+async def filter_new_books(
+    cfg: ChaptarrConfig, book_ids: list[str]
+) -> tuple[list[str], dict[str, dict]]:
+    """Split book ids into (still worth downloading, already in Chaptarr).
+
+    Fails open: if the check is switched off, or Chaptarr can't be reached, every
+    book comes back in the download list. Losing an audiobook because a metadata
+    server was down would be a far worse outcome than downloading a duplicate.
+    """
+    if not cfg.skip_check_active or not book_ids:
+        return list(book_ids), {}
+
+    logger = get_logger()
+    try:
+        results = await check_books(cfg, book_ids)
+    except ChaptarrError as exc:
+        logger.warning("[chaptarr] library check failed, downloading anyway: %s", exc)
+        return list(book_ids), {}
+    except Exception as exc:  # noqa: BLE001 — never block a download on this
+        logger.warning("[chaptarr] library check failed, downloading anyway: %s", exc)
+        return list(book_ids), {}
+
+    wanted = [b for b in book_ids if not results[b]["would_skip"]]
+    skipped = {b: results[b] for b in book_ids if results[b]["would_skip"]}
+    if skipped:
+        logger.info(
+            "[chaptarr] skipping %d of %d book(s) already in Chaptarr (skip_when=%s)",
+            len(skipped), len(book_ids), cfg.skip_when,
+        )
+    return wanted, skipped
+
+
+def skip_reason(match: dict) -> str:
+    """The human-readable 'why we didn't download it' line, from a check result."""
+    title = match.get("title") or match.get("book_id")
+    what = "already has a file for" if match.get("has_file") else "already tracks"
+    return f"Chaptarr {what} “{title}” — skipped downloading it from Audible."
+
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -385,6 +663,48 @@ def _finish(record_id: int, **fields) -> dict:
         }
 
 
+def record_skipped_download(
+    book_id: str,
+    match: dict,
+    *,
+    book_title: Optional[str] = None,
+    user_id: Optional[int] = None,
+) -> int:
+    """Log a download we didn't make, so the skip is visible rather than silent.
+
+    Refreshes the existing row when the same book is skipped again — an
+    auto-download sweep re-skips every book Chaptarr owns on every run, and one
+    row per book per sweep would bury the history it is meant to explain.
+    """
+    title = book_title or match.get("title") or None
+    with SessionLocal() as db:
+        existing_id = (
+            db.query(ChaptarrImport.id)
+            .filter(
+                ChaptarrImport.book_id == book_id,
+                ChaptarrImport.matched_by == "already_in_chaptarr",
+            )
+            .order_by(ChaptarrImport.id.desc())
+            .limit(1)
+            .scalar()
+        )
+
+    if existing_id is not None:
+        _finish(existing_id, status="skipped", message=skip_reason(match),
+                book_title=title)
+        return existing_id
+
+    record_id = create_record(
+        book_id,
+        book_title=title,
+        user_id=user_id,
+        status="skipped",
+        message=skip_reason(match),
+    )
+    _finish(record_id, matched_by="already_in_chaptarr", status="skipped")
+    return record_id
+
+
 async def import_book(
     book_id: str,
     *,
@@ -459,6 +779,10 @@ async def import_book(
                        message=f"Unexpected failure: {exc}", file_path=mapped[0])
 
     logger.info("[chaptarr] %s: command %s → %s (%s)", book_id, command_id, status, message)
+    if status == "complete":
+        # Chaptarr's library just changed; the next skip-check must not answer
+        # "no" for a book we have this second handed it.
+        invalidate_library_cache(cfg)
     return _finish(record_id, status=status, message=message)
 
 

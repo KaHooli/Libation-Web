@@ -18,6 +18,8 @@ class ScanResponse(BaseModel):
 class DownloadRequest(BaseModel):
     book_id: str
     book_title: Optional[str] = None
+    # Download even if Chaptarr already has the book ("Download anyway").
+    force: bool = False
 
 
 class DownloadResponse(BaseModel):

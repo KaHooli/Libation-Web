@@ -13,6 +13,8 @@ class ChaptarrSettings(BaseModel):
     auto_import: bool = False
     path_from: str = ""
     path_to: str = ""
+    skip_existing: bool = False
+    skip_when: str = "has_file"
     api_key_set: bool = False
 
 
@@ -21,6 +23,9 @@ class ChaptarrStatus(BaseModel):
 
     enabled: bool = False
     configured: bool = False
+    # Whether downloads are being checked against Chaptarr's library first.
+    skip_existing: bool = False
+    skip_when: str = "has_file"
 
 
 class ChaptarrSettingsUpdate(BaseModel):
@@ -30,6 +35,8 @@ class ChaptarrSettingsUpdate(BaseModel):
     auto_import: Optional[bool] = None
     path_from: Optional[str] = None
     path_to: Optional[str] = None
+    skip_existing: Optional[bool] = None
+    skip_when: Optional[str] = None
     # Omit to leave the stored key untouched; send "" to clear it.
     api_key: Optional[str] = None
 
@@ -64,3 +71,27 @@ class ChaptarrImportResponse(BaseModel):
 
 class ChaptarrImportRequest(BaseModel):
     book_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class ChaptarrCheckRequest(BaseModel):
+    book_ids: list[str] = Field(default_factory=list, max_length=1000)
+
+
+class ChaptarrBookCheck(BaseModel):
+    """What Chaptarr knows about one Audible ASIN."""
+
+    book_id: str
+    in_chaptarr: bool
+    has_file: bool
+    title: Optional[str] = None
+    chaptarr_book_id: Optional[int] = None
+    # True when this book would not be downloaded from Audible, under the
+    # current `skip_when` setting.
+    would_skip: bool
+
+
+class ChaptarrCheckResponse(BaseModel):
+    # Echoed so a client can explain *why* a book would or wouldn't be skipped.
+    skip_existing: bool
+    skip_when: str
+    results: list[ChaptarrBookCheck] = Field(default_factory=list)
