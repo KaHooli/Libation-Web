@@ -15,6 +15,11 @@ const IMPORT_MODES: { value: ChaptarrSettingsData["import_mode"]; label: string;
   { value: "move", label: "Move", desc: "Hand the file over to Chaptarr" },
 ];
 
+const SKIP_MODES: { value: ChaptarrSettingsData["skip_when"]; label: string; desc: string }[] = [
+  { value: "has_file", label: "It has the file", desc: "Chaptarr holds an audiobook file for it" },
+  { value: "in_library", label: "It's in the library", desc: "Chaptarr knows the book, file or not" },
+];
+
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return (
     <button
@@ -226,6 +231,46 @@ export function ChaptarrSection() {
               </p>
             </div>
 
+            <div className="flex items-center justify-between gap-4 pt-1">
+              <div>
+                <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                  Skip books Chaptarr already has
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Ask Chaptarr before pulling a book from Audible, and don't download it twice.
+                  If Chaptarr can't be reached the download goes ahead anyway.
+                </p>
+              </div>
+              <Toggle checked={data.skip_existing} label="Skip books Chaptarr already has"
+                      onChange={() => save({ skip_existing: !data.skip_existing })} />
+            </div>
+
+            {data.skip_existing && (
+              <div className="space-y-1.5">
+                <Label>Count a book as “already have it” when…</Label>
+                <div className="flex flex-wrap gap-2">
+                  {SKIP_MODES.map(m => (
+                    <button
+                      key={m.value}
+                      onClick={() => save({ skip_when: m.value })}
+                      title={m.desc}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        data.skip_when === m.value
+                          ? "border-brand-500 bg-brand-50 text-brand-700 dark:bg-brand-900/30 dark:text-brand-100"
+                          : "border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Only Chaptarr's audiobook library counts — owning the eBook never stops the
+                  audiobook downloading. Every skip is listed below.
+                </p>
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <Label>Path mapping (optional)</Label>
               <div className="flex items-center gap-2">
@@ -260,10 +305,11 @@ export function ChaptarrSection() {
         )}
 
         <div className="pt-2 border-t border-slate-100 dark:border-slate-700">
-          <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Recent imports</p>
+          <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Recent activity</p>
           <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
-            Shows what Chaptarr reported for each command. Chaptarr's own History view has the
-            per-file detail if a book doesn't show up in its library afterwards.
+            What Chaptarr reported for each command, plus any download skipped because Chaptarr
+            already had the book. Chaptarr's own History view has the per-file detail if a book
+            doesn't show up in its library afterwards.
           </p>
           {imports.length === 0 ? (
             <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -282,6 +328,7 @@ export function ChaptarrSection() {
                     <p className="text-xs text-slate-500 dark:text-slate-400">
                       {i.matched_by === "asin" && "Matched by ASIN · "}
                       {i.matched_by === "folder_scan" && "Folder scan fallback · "}
+                      {i.matched_by === "already_in_chaptarr" && "Download skipped · "}
                       {i.message || i.status}
                     </p>
                   </div>

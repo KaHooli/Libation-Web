@@ -9,6 +9,8 @@ from ..database import get_db
 from ..models.chaptarr import ChaptarrImport
 from ..models.user import DEFAULT_PERMISSIONS
 from ..schemas.chaptarr import (
+    ChaptarrCheckRequest,
+    ChaptarrCheckResponse,
     ChaptarrConnectionTest,
     ChaptarrImportRequest,
     ChaptarrImportResponse,
@@ -30,6 +32,8 @@ def _to_settings(cfg: chaptarr_svc.ChaptarrConfig, api_key_set: bool) -> Chaptar
         auto_import=cfg.auto_import,
         path_from=cfg.path_from,
         path_to=cfg.path_to,
+        skip_existing=cfg.skip_existing,
+        skip_when=cfg.skip_when,
         api_key_set=api_key_set,
     )
 
@@ -44,7 +48,12 @@ def get_settings(db: Session = Depends(get_db), _=Depends(require_admin)):
 def get_status(db: Session = Depends(get_db), _=Depends(get_current_user)):
     """Whether Chaptarr is usable — safe for non-admins, leaks no connection details."""
     cfg = chaptarr_svc.load_config(db)
-    return ChaptarrStatus(enabled=cfg.enabled, configured=cfg.configured)
+    return ChaptarrStatus(
+        enabled=cfg.enabled,
+        configured=cfg.configured,
+        skip_existing=cfg.skip_check_active,
+        skip_when=cfg.skip_when,
+    )
 
 
 @router.put("/settings", response_model=ChaptarrSettings)
@@ -58,6 +67,11 @@ def update_settings(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"import_mode must be one of {', '.join(chaptarr_svc.IMPORT_MODES)}",
         )
+    if body.skip_when is not None and body.skip_when not in chaptarr_svc.SKIP_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"skip_when must be one of {', '.join(chaptarr_svc.SKIP_MODES)}",
+        )
 
     patch = {
         "chaptarr_enabled": body.enabled,
@@ -66,12 +80,17 @@ def update_settings(
         "chaptarr_auto_import": body.auto_import,
         "chaptarr_path_from": body.path_from,
         "chaptarr_path_to": body.path_to,
+        "chaptarr_skip_existing": body.skip_existing,
+        "chaptarr_skip_when": body.skip_when,
     }
     # `api_key` omitted → keep the stored key; sent as "" → clear it.
     if body.api_key is not None:
         patch["chaptarr_api_key"] = body.api_key
 
     cfg = chaptarr_svc.save_config(db, {k: v for k, v in patch.items() if v is not None})
+    # A different URL or key means a different library; don't answer skip-checks
+    # from the old instance's cached index.
+    chaptarr_svc.invalidate_library_cache()
     return _to_settings(cfg, bool(cfg.api_key))
 
 
@@ -125,6 +144,41 @@ async def import_books(
         .filter(ChaptarrImport.id.in_(record_ids))
         .order_by(ChaptarrImport.id)
         .all()
+    )
+
+
+@router.post("/check", response_model=ChaptarrCheckResponse)
+async def check_books(
+    body: ChaptarrCheckRequest,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user),
+):
+    """Ask Chaptarr which of these books it already has, without downloading anything.
+
+    Reports what Chaptarr holds regardless of whether the skip-check is switched
+    on, so the UI can show the answer before anyone commits to turning it on.
+    """
+    book_ids = list(dict.fromkeys(b.strip() for b in body.book_ids if b and b.strip()))
+    if not book_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="No book IDs supplied")
+
+    cfg = chaptarr_svc.load_config(db)
+    if not cfg.configured:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Chaptarr is not configured — set its URL and API key in Settings.",
+        )
+
+    try:
+        results = await chaptarr_svc.check_books(cfg, book_ids)
+    except ChaptarrError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+    return ChaptarrCheckResponse(
+        skip_existing=cfg.skip_check_active,
+        skip_when=cfg.skip_when,
+        results=[results[b] for b in book_ids],
     )
 
 

@@ -284,6 +284,21 @@ Replaced `libationcli` subprocess calls for downloads and scans with a LibationB
 - [x] **CI** — `scripts/test-chaptarr.py` runs the whole flow against a stub Chaptarr server; gates the `merge` job
 - [x] **Runtime paths follow their settings** — `database.py` creates the directory the configured SQLite URL points at (`ensure_db_directory()`) instead of hardcoding `/data`, and `logger.py` / `api/logs.py` / `api/settings.py` derive `/config` paths from `LIBATION_CONFIG`. Hardcoded top-level paths merely succeed on a root dev box while failing on an unprivileged host (the CI runner). The deployed container is unaffected — the Dockerfile creates `/data` and `/config` at build time. `scripts/test-chaptarr.py` asserts no stray top-level directory is created, so the same mistake fails on any box
 
+
+## Phase 9 Extended — Don't download what Chaptarr already has ✅
+- [x] **Library index** — `fetch_library()` pages `GET /api/v1/book/paged?includeUnmonitored=true&mediaType=audiobook`, falling back to `GET /api/v1/book?mediaType=audiobook` on builds without the paged route
+- [x] **ASIN folding** — every Audible id on a Chaptarr record is indexed: `asin`, `audibleASIN`, the `az:`-prefixed `foreignBookId`/`foreignEditionId`, and the same fields plus `asins[]` on each edition. Non-`az:` providers (`gr:`, `ol:`, `gb:`) are filtered out so a Goodreads id can never match an ASIN
+- [x] **Audiobooks only** — Chaptarr keeps separate audiobook and eBook rows; eBook records are dropped client-side too, so owning the eBook never suppresses the audiobook
+- [x] **`skip_when` modes** — `has_file` (default: Chaptarr holds a file on disk) or `in_library` (Chaptarr knows the book at all)
+- [x] **Fails open** — `filter_new_books()` swallows every error and returns the full download list; an unreachable Chaptarr must never cost an audiobook
+- [x] **60 s library cache** — a bulk sweep of hundreds of ASINs costs one round trip; invalidated on a successful import and on any settings change
+- [x] **All three download paths** — `POST /api/downloads` (409 `already_in_chaptarr`, `force: true` overrides), `_auto_download_if_enabled()` after a scan, and `download-all` (switches to `_run_liberate_checked()`, since the blanket `libationcli liberate` can't be filtered)
+- [x] **Skips are recorded, not silent** — `chaptarr_imports` rows with `status="skipped"` / `matched_by="already_in_chaptarr"`, refreshed per book rather than one row per sweep
+- [x] **API** — `POST /api/chaptarr/check`; `GET /api/chaptarr/status` gains `skip_existing` / `skip_when`
+- [x] **UI** — Settings toggle + mode selector, history relabelled **Recent activity**; Liberate **Check Chaptarr** bulk action, "In Chaptarr" / "Tracked" tile badges, **Download anyway** on a refused download
+- [x] **Tests** — 11 new checks in `scripts/test-chaptarr.py`: both skip modes, the eBook exclusion, `force`, one-fetch caching, the `/book` fallback route, fail-open, and skip-row idempotence
+
+
 ---
 
 ## Future (not built)

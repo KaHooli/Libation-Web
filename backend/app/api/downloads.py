@@ -94,11 +94,18 @@ async def _auto_download_if_enabled() -> None:
         except Exception:
             return
 
+    with SessionLocal() as db:
+        cfg = chaptarr_svc.load_config(db)
+
     for account_id in opted_in:
         book_ids = libation_svc.get_liberate_book_ids(
             filter_status="not_liberated",
             account_id=account_id,
         )
+        # Anything Chaptarr already holds is not worth pulling from Audible again.
+        book_ids, skipped = await chaptarr_svc.filter_new_books(cfg, book_ids)
+        for book_id, match in skipped.items():
+            chaptarr_svc.record_skipped_download(book_id, match, user_id=admin_id)
         for book_id in book_ids:
             with SessionLocal() as db:
                 existing = db.query(Download).filter(
@@ -236,6 +243,27 @@ async def queue_download(
             status_code=status.HTTP_409_CONFLICT,
             detail="This book is already queued or downloading",
         )
+
+    # Don't pull a book from Audible that Chaptarr already holds. `force` is the
+    # UI's "Download anyway"; the check is a no-op unless it's switched on, and
+    # fails open if Chaptarr can't be reached.
+    if not body.force:
+        cfg = chaptarr_svc.load_config(db)
+        _, skipped = await chaptarr_svc.filter_new_books(cfg, [body.book_id])
+        match = skipped.get(body.book_id)
+        if match:
+            chaptarr_svc.record_skipped_download(
+                body.book_id, match, book_title=body.book_title,
+                user_id=current_user.id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": chaptarr_svc.skip_reason(match),
+                    "reason": "already_in_chaptarr",
+                    "chaptarr": match,
+                },
+            )
 
     dl = Download(
         book_id=body.book_id,

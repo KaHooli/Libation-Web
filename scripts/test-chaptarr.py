@@ -8,6 +8,12 @@ provider ids and `selectionSource` that let an *unmonitored* book import), the
 DownloadedBooksScan fallback for an ASIN Chaptarr's metadata server doesn't
 know, path mapping, and that the API key never comes back over our own API.
 
+It also covers the other direction — asking Chaptarr whether it already has a
+book before downloading it from Audible: what counts as "already has it" under
+each `skip_when` mode, that an eBook copy never suppresses the audiobook, that
+`force` overrides the check, that the library index is fetched once and cached,
+and that a broken Chaptarr fails open rather than blocking downloads.
+
 Needs only `backend/requirements.txt` — no test framework.
 
 Usage:
@@ -57,9 +63,49 @@ API_KEY = "test-api-key-123"
 ASIN = "B002V0QUOC"
 UNKNOWN_ASIN = "B0UNKNOWN1"
 
-received = {"commands": [], "lookups": [], "auth": []}
+# Books the stub Chaptarr already holds, for the pre-download check.
+OWNED_ASIN = "B00OWNED01"      # audiobook with a file on disk
+TRACKED_ASIN = "B00TRACK01"    # audiobook in the library, no file yet
+EBOOK_ASIN = "B00EBOOK01"      # only the eBook — the audiobook is still wanted
+
+# Deliberately not filtered by mediaType: a stand-in for a Chaptarr build that
+# ignores the query param, so the eBook assertion tests *our* guard, not theirs.
+CHAPTARR_LIBRARY = [
+    {
+        "id": 11, "title": "The Owned One", "mediaType": "audiobook",
+        "foreignBookId": f"az:{OWNED_ASIN}", "hasFiles": True,
+        "statistics": {"bookFileCount": 1},
+        "editions": [{"foreignEditionId": f"az:{OWNED_ASIN}", "asin": OWNED_ASIN}],
+    },
+    {
+        "id": 12, "title": "The Tracked One", "mediaType": "audiobook",
+        "foreignBookId": "az:B00OTHERID", "hasFiles": False,
+        "statistics": {"bookFileCount": 0},
+        # The ASIN we care about is only on the edition, not the work.
+        "editions": [{"foreignEditionId": f"az:{TRACKED_ASIN}",
+                      "audibleASIN": TRACKED_ASIN, "bookFileCount": 0}],
+    },
+    {
+        "id": 13, "title": "The eBook One", "mediaType": "ebook",
+        "foreignBookId": f"az:{EBOOK_ASIN}", "hasFiles": True,
+        "statistics": {"bookFileCount": 1},
+        "editions": [{"foreignEditionId": f"az:{EBOOK_ASIN}", "asin": EBOOK_ASIN}],
+    },
+    {
+        # A Goodreads-sourced book: not an Audible id, must never match an ASIN.
+        "id": 14, "title": "Someone Else's Edition", "mediaType": "audiobook",
+        "foreignBookId": "gr:1234567890", "hasFiles": True,
+        "statistics": {"bookFileCount": 1}, "editions": [],
+    },
+]
+
+received = {"commands": [], "lookups": [], "auth": [], "library_fetches": []}
 # Flipped by a test to make the stub report an unsuccessful command.
 command_result = {"value": "successful"}
+# Flipped by a test to make the library index unreadable.
+library_broken = {"value": False}
+# Flipped by a test to stand in for an older Chaptarr with no /book/paged route.
+library_paged_missing = {"value": False}
 
 
 class StubChaptarr(BaseHTTPRequestHandler):
@@ -95,6 +141,21 @@ class StubChaptarr(BaseHTTPRequestHandler):
                     ],
                 }])
             return self._json(200, [])
+        if u.path == "/api/v1/book" and library_paged_missing["value"]:
+            received["library_fetches"].append("book?" + u.query)
+            return self._json(200, CHAPTARR_LIBRARY)
+        if u.path == "/api/v1/book/paged":
+            if library_paged_missing["value"]:
+                return self._json(404, {"error": "no such route"})
+            received["library_fetches"].append(u.query)
+            if library_broken["value"]:
+                return self._json(500, {"error": "metadata server on fire"})
+            q = parse_qs(u.query)
+            offset = int(q.get("offset", ["0"])[0])
+            size = int(q.get("pageSize", ["500"])[0])
+            page = CHAPTARR_LIBRARY[offset:offset + size]
+            return self._json(200, {"records": page, "totalCount": len(CHAPTARR_LIBRARY),
+                                    "offset": offset, "pageSize": size})
         if u.path.startswith("/api/v1/command/"):
             return self._json(200, {"id": 42, "status": "completed",
                                     "result": command_result["value"],
@@ -122,6 +183,8 @@ def main():
 
     from fastapi.testclient import TestClient
     from app.main import app
+    from app.services import chaptarr as chaptarr_svc
+    from app.database import SessionLocal
 
     book_file = BOOKS / "Brandon Sanderson" / "Mistborn [B002V0QUOC]" / "Mistborn [B002V0QUOC].m4b"
     book_file.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +223,7 @@ def main():
         assert r.status_code == 200, r.text
         assert r.json() == {"enabled": False, "url": "", "import_mode": "auto",
                             "auto_import": False, "path_from": "", "path_to": "",
+                            "skip_existing": False, "skip_when": "has_file",
                             "api_key_set": False}, r.json()
         print("✓ settings default to off")
 
@@ -279,6 +343,124 @@ def main():
         assert f["path"] == "/books/Brandon Sanderson/Mistborn [B002V0QUOC]/Mistborn [B002V0QUOC].m4b", f
         print("✓ path mapping rewrites the prefix Chaptarr sees")
 
+        # ── Checking Chaptarr before downloading from Audible ─────────────────
+
+        # The check endpoint reports what Chaptarr holds, whatever the setting.
+        all_asins = [OWNED_ASIN, TRACKED_ASIN, EBOOK_ASIN, ASIN]
+        r = client.post("/api/chaptarr/check", json={"book_ids": all_asins}, headers=h)
+        assert r.status_code == 200, r.text
+        by_id = {x["book_id"]: x for x in r.json()["results"]}
+        assert by_id[OWNED_ASIN]["in_chaptarr"] and by_id[OWNED_ASIN]["has_file"]
+        assert by_id[OWNED_ASIN]["title"] == "The Owned One", by_id[OWNED_ASIN]
+        assert by_id[TRACKED_ASIN]["in_chaptarr"] and not by_id[TRACKED_ASIN]["has_file"]
+        assert not by_id[EBOOK_ASIN]["in_chaptarr"], "an eBook copy is not an audiobook"
+        assert not by_id[ASIN]["in_chaptarr"], "never downloaded into Chaptarr"
+        assert r.json()["skip_existing"] is False, "reported, not enforced, while off"
+        assert by_id[OWNED_ASIN]["would_skip"] and not by_id[TRACKED_ASIN]["would_skip"]
+        print("✓ check reports what Chaptarr holds, ignoring its eBook rows")
+
+        # One library fetch serves the whole batch, and the index is cached.
+        fetches_before = len(received["library_fetches"])
+        client.post("/api/chaptarr/check", json={"book_ids": all_asins}, headers=h)
+        assert len(received["library_fetches"]) == fetches_before, \
+            f"library re-fetched: {received['library_fetches'][fetches_before:]}"
+        assert "mediaType=audiobook" in received["library_fetches"][0], \
+            received["library_fetches"][0]
+        assert "includeUnmonitored=true" in received["library_fetches"][0]
+        print("✓ library index fetched once per batch and cached, audiobooks only")
+
+        # While the check is off, a book Chaptarr owns still downloads.
+        r = client.post("/api/downloads", headers=h,
+                        json={"book_id": OWNED_ASIN, "book_title": "The Owned One"})
+        assert r.status_code == 201, (r.status_code, r.text)
+        print("✓ downloads are unaffected while the skip-check is off")
+
+        # Turn it on: a book Chaptarr has a file for is refused with a reason.
+        r = client.put("/api/chaptarr/settings", headers=h,
+                       json={"skip_existing": True, "skip_when": "has_file"})
+        assert r.status_code == 200 and r.json()["skip_existing"] is True, r.json()
+        r = client.post("/api/downloads", headers=h,
+                        json={"book_id": OWNED_ASIN, "book_title": "The Owned One"})
+        assert r.status_code == 409, (r.status_code, r.text)
+        detail = r.json()["detail"]
+        assert detail["reason"] == "already_in_chaptarr", detail
+        assert detail["chaptarr"]["title"] == "The Owned One", detail
+        assert "The Owned One" in detail["message"], detail
+        print("✓ a book Chaptarr already has a file for is not pulled from Audible")
+
+        # The skip is recorded rather than silently swallowed…
+        rows = [x for x in client.get("/api/chaptarr/imports", headers=h).json()
+                if x["book_id"] == OWNED_ASIN and x["matched_by"] == "already_in_chaptarr"]
+        assert len(rows) == 1 and rows[0]["status"] == "skipped", rows
+        # …and skipping it again refreshes that row rather than adding another,
+        # so a repeating auto-download sweep can't bury the history.
+        client.post("/api/downloads", headers=h, json={"book_id": OWNED_ASIN})
+        client.post("/api/downloads", headers=h, json={"book_id": OWNED_ASIN})
+        rows = [x for x in client.get("/api/chaptarr/imports", headers=h).json()
+                if x["book_id"] == OWNED_ASIN and x["matched_by"] == "already_in_chaptarr"]
+        assert len(rows) == 1, rows
+        print("✓ the skipped download shows up once in the Chaptarr history")
+
+        # has_file mode leaves a book Chaptarr merely tracks alone.
+        r = client.post("/api/downloads", headers=h, json={"book_id": TRACKED_ASIN})
+        assert r.status_code == 201, (r.status_code, r.text)
+        # in_library mode treats tracking it as enough.
+        client.put("/api/chaptarr/settings", headers=h, json={"skip_when": "in_library"})
+        r = client.post("/api/downloads", headers=h, json={"book_id": "B00TRACK02"})
+        assert r.status_code == 201, "an unrelated book is still downloadable"
+        r = client.post("/api/downloads", headers=h, json={"book_id": TRACKED_ASIN})
+        assert r.status_code == 409, (r.status_code, r.text)
+        assert r.json()["detail"]["reason"] == "already_in_chaptarr"
+        print("✓ skip_when picks between 'has a file' and 'is in the library'")
+
+        # An eBook in Chaptarr never suppresses the audiobook, even here.
+        r = client.post("/api/downloads", headers=h, json={"book_id": EBOOK_ASIN})
+        assert r.status_code == 201, (r.status_code, r.text)
+        print("✓ owning the eBook never suppresses the audiobook download")
+
+        # "Download anyway" overrides the check.
+        client.put("/api/chaptarr/settings", headers=h, json={"skip_when": "has_file"})
+        r = client.post("/api/downloads", headers=h,
+                        json={"book_id": OWNED_ASIN, "force": True})
+        assert r.status_code == 201, (r.status_code, r.text)
+        print("✓ force downloads a book Chaptarr already has")
+
+        # A broken Chaptarr must not block downloads.
+        chaptarr_svc.invalidate_library_cache()
+        library_broken["value"] = True
+        try:
+            r = client.post("/api/downloads", headers=h, json={"book_id": "B00OWNED02"})
+            assert r.status_code == 201, (r.status_code, r.text)
+            r = client.post("/api/chaptarr/check", json={"book_ids": [OWNED_ASIN]}, headers=h)
+            assert r.status_code == 502, (r.status_code, r.text)
+        finally:
+            library_broken["value"] = False
+            chaptarr_svc.invalidate_library_cache()
+        print("✓ an unreachable Chaptarr fails open — the download still runs")
+
+        # An older Chaptarr with no /book/paged still answers, via /book.
+        chaptarr_svc.invalidate_library_cache()
+        library_paged_missing["value"] = True
+        try:
+            r = client.post("/api/chaptarr/check", headers=h,
+                            json={"book_ids": [OWNED_ASIN, EBOOK_ASIN]})
+            assert r.status_code == 200, (r.status_code, r.text)
+            got = {x["book_id"]: x["in_chaptarr"] for x in r.json()["results"]}
+            assert got == {OWNED_ASIN: True, EBOOK_ASIN: False}, got
+            assert received["library_fetches"][-1].startswith("book?"), \
+                received["library_fetches"][-1]
+        finally:
+            library_paged_missing["value"] = False
+            chaptarr_svc.invalidate_library_cache()
+        print("✓ falls back to /book when Chaptarr has no paged route")
+
+        # An unknown skip_when is refused rather than silently stored.
+        r = client.put("/api/chaptarr/settings", headers=h, json={"skip_when": "whenever"})
+        assert r.status_code == 422, (r.status_code, r.text)
+        assert client.get("/api/chaptarr/settings", headers=h).json()["skip_when"] == "has_file"
+        client.put("/api/chaptarr/settings", headers=h, json={"skip_existing": False})
+        print("✓ an invalid skip_when is rejected")
+
         # Clearing the key
         r = client.put("/api/chaptarr/settings", headers=h, json={"api_key": ""})
         assert r.json()["api_key_set"] is False, r.json()
@@ -292,13 +474,37 @@ def main():
         assert client.get("/api/chaptarr/settings", headers=h2).status_code == 403
         assert client.get("/api/chaptarr/imports", headers=h2).status_code == 200
         r = client.get("/api/chaptarr/status", headers=h2)
-        assert r.status_code == 200 and set(r.json()) == {"enabled", "configured"}, r.json()
+        assert r.status_code == 200, r.status_code
+        assert set(r.json()) == {"enabled", "configured", "skip_existing", "skip_when"}, r.json()
+        assert "url" not in r.json() and "api_key" not in r.json(), r.json()
         assert r.json()["configured"] is False, "key was just cleared"
         print("✓ settings are admin-only; status and history are not")
 
     # The post-download hook stays quiet unless Chaptarr is enabled and configured.
     import asyncio
-    from app.services import chaptarr as chaptarr_svc
+
+    # The bulk split the auto-download and "Download All" paths rely on.
+    with SessionLocal() as db:
+        cfg = chaptarr_svc.save_config(db, {"chaptarr_api_key": API_KEY,
+                                            "chaptarr_skip_existing": True})
+    chaptarr_svc.invalidate_library_cache()
+    batch = [OWNED_ASIN, TRACKED_ASIN, EBOOK_ASIN, ASIN]
+    wanted, skipped = asyncio.run(chaptarr_svc.filter_new_books(cfg, batch))
+    assert wanted == [TRACKED_ASIN, EBOOK_ASIN, ASIN], wanted
+    assert list(skipped) == [OWNED_ASIN], skipped
+    assert "skipped downloading it from Audible" in chaptarr_svc.skip_reason(skipped[OWNED_ASIN])
+    print("✓ bulk filter keeps only the books Chaptarr does not already have")
+
+    # Same batch with Chaptarr unreachable: everything stays on the download list.
+    chaptarr_svc.invalidate_library_cache()
+    library_broken["value"] = True
+    wanted, skipped = asyncio.run(chaptarr_svc.filter_new_books(cfg, batch))
+    library_broken["value"] = False
+    assert wanted == batch and not skipped, (wanted, skipped)
+    print("✓ bulk filter fails open when Chaptarr cannot be read")
+
+    with SessionLocal() as db:
+        chaptarr_svc.save_config(db, {"chaptarr_api_key": "", "chaptarr_skip_existing": False})
     received["commands"].clear()
     asyncio.run(chaptarr_svc.import_after_download(ASIN, "Mistborn", 1))
     assert not received["commands"], "auto-import must not fire while the key is cleared"
