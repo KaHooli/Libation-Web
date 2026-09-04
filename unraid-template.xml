@@ -80,6 +80,42 @@
       <Mode/>
     </Variable>
     <Variable>
+      <Value>false</Value>
+      <Name>OIDC_ENABLED</Name>
+      <Description>Optional. Set to true to sign in with an OpenID Connect provider (Authelia, Authentik, Keycloak, Pocket ID, and so on). You must also fill in OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET — until all four are set, password sign-in stays enabled. Once SSO is fully configured, password sign-in switches off; set ALLOW_PASSWORD_LOGIN to true to keep both.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>OIDC_ISSUER</Name>
+      <Description>Optional. Your provider's base URL, e.g. https://auth.example.com — the rest is discovered automatically.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>OIDC_CLIENT_ID</Name>
+      <Description>Optional. The client id you registered with your provider.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>OIDC_CLIENT_SECRET</Name>
+      <Description>Optional. The client secret you registered with your provider.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>OIDC_REDIRECT_URL</Name>
+      <Description>Optional but required if you reach Libation through a reverse proxy. The exact callback URL registered with your provider, e.g. https://libation.example.com/api/auth/oidc/callback</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>ALLOW_PASSWORD_LOGIN</Name>
+      <Description>Optional. Leave blank to let it follow SSO (on until single sign-on is configured, off afterwards). Set to true to keep username/password sign-in available alongside SSO — also how you get back in if your provider is misconfigured.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
       <Value/>
       <Name>DATABASE_URL</Name>
       <Description>Optional. Leave blank to use SQLite on the /data volume (recommended). To use an existing PostgreSQL server instead, enter a connection string such as postgresql://user:password@host:5432/libation — the schema is created automatically. Switching this points the app at a different, empty database; it does not move your existing data.</Description>

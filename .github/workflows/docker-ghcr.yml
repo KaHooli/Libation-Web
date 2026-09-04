@@ -191,11 +191,32 @@ jobs:
           POTATION_TEST_POSTGRES_URL: postgresql://potation:potation@127.0.0.1:5432/potation_test
         run: PYTHONPATH=backend python scripts/test-potation.py
 
+  # Single sign-on: the flow itself, and every way it has to refuse — replayed
+  # state, bad nonce, wrong key/audience/issuer, HMAC against a JWKS.
+  oidc:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run OIDC test
+        run: PYTHONPATH=backend python scripts/test-oidc.py
+
   # Combine the two single-arch images into one multi-arch manifest and apply
   # the human-readable tags. Only this job creates tags; the build job pushes
   # untagged digests.
   merge:
-    needs: [prepare, build, smoke, chaptarr, potation]
+    needs: [prepare, build, smoke, chaptarr, potation, oidc]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:

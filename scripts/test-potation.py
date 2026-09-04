@@ -103,6 +103,9 @@ LEGACY_TABLES = {
     "system_settings",
 }
 
+#: Added by 0003. Kept separate because it belongs to auth, not the engine.
+AUTH_TABLES = {"oidc_login_states"}
+
 
 # ── URL handling and per-backend engine arguments ─────────────────────────────
 
@@ -293,9 +296,14 @@ def run_database_suite(url: str, label: str) -> dict:
     run_migrations(engine)
 
     tables = table_names(engine)
-    missing = (LEGACY_TABLES | POTATION_TABLES) - tables
+    missing = (LEGACY_TABLES | POTATION_TABLES | AUTH_TABLES) - tables
     assert not missing, f"missing after fresh migrate: {sorted(missing)}"
     assert "alembic_version" in tables
+
+    # 0003 adds columns to an existing table, which is the case batch mode
+    # exists for on SQLite — assert it actually landed.
+    user_columns = {c["name"] for c in inspect(engine).get_columns("users")}
+    assert {"oidc_subject", "oidc_issuer"} <= user_columns, sorted(user_columns)
     print(f"✓ [{label}] fresh database migrates to head with all tables")
 
     fresh_fingerprint = _schema_fingerprint(engine)

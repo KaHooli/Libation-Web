@@ -36,6 +36,20 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 - **Session persistence**: On page load, silently calls `/api/auth/refresh` using the cookie
 - **Auto-refresh**: Timer in `AuthContext` refreshes access token 2 min before expiry
 
+## OIDC single sign-on (`backend/app/services/oidc.py`, `backend/app/api/auth.py`)
+- Authorization-code flow with PKCE. `begin_login()` stores `state`, `nonce` and the PKCE verifier in `oidc_login_states` (a table, not memory — the callback may land on a different worker), and `complete_login()` marks the row consumed **before** exchanging the code, so a replay loses the race
+- ID tokens are verified against the provider's JWKS. `ALLOWED_ALGORITHMS` is asymmetric-only: accepting an HS\* algorithm while verifying against a JWKS would let a token forged with the public key as its HMAC secret validate
+- Discovery and JWKS documents are cached 5 minutes (`clear_cache()` on settings change / `POST /api/auth/oidc/test`)
+- **`settings.oidc_configured`** requires `OIDC_ENABLED` *and* issuer *and* client id *and* secret. **`settings.password_login_enabled`** is `ALLOW_PASSWORD_LOGIN` when set, else `not oidc_configured`. The two-part rule means a half-filled config can never disable password login and lock everyone out; `ALLOW_PASSWORD_LOGIN=true` is the documented escape hatch
+- `POST /api/auth/login` and `/verify-2fa` return 403 (naming the env var) when password login is off
+- Users are keyed on `users.oidc_subject`, scoped by `users.oidc_issuer`. First sign-in links an existing local account by email then username; an account already linked to a *different* subject is never taken over. `OIDC_AUTO_CREATE_USERS=false` restricts SSO to pre-existing accounts. SSO-created users get an unusable random password hash
+- `OIDC_ADMIN_GROUP` both grants and revokes admin on each login; blank leaves admin managed in-app
+- The callback sets the refresh cookie and 303s into the app — the access token never travels in a URL, because `AuthContext` already calls `/api/auth/refresh` on mount. `next` is restricted to same-origin paths (`safe_next_path`) so the callback is not an open redirect
+- `GET /api/auth/config` is public (the login page needs it before anyone has credentials) and exposes only `{password_login_enabled, oidc_enabled, oidc_provider_name}` — never the issuer, client id or secret
+- `UserResponse.is_sso_user` is a computed field; `oidc_subject` is read from the ORM object but `exclude=True` so it never serialises
+- **Behind a reverse proxy set `OIDC_REDIRECT_URL`** — uvicorn is not started with `--proxy-headers`, so the derived callback URL would use the internal scheme and host
+- Tests: `scripts/test-oidc.py` runs against an in-process stub provider with a real RSA JWKS. CI job `oidc` gates `merge`
+
 ### Auth API endpoints (`backend/app/api/auth.py`)
 - `GET /api/auth/default-credentials` — returns `{"using_default_credentials": bool}`; compares logged-in user's username against `ADMIN_USERNAME` env var and verifies stored hash still matches `ADMIN_PASSWORD`. Used by Settings page to show the amber warning banner.
 - `PATCH /api/auth/me` — free-form dict body; updates `audible_account_id` and/or `owner_name` on the logged-in user
