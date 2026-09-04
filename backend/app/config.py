@@ -1,6 +1,9 @@
 from pydantic_settings import BaseSettings
 import secrets
 
+#: SQLite on the /data volume. PostgreSQL is opt-in by setting DATABASE_URL.
+DEFAULT_DATABASE_URL = "sqlite:////data/app.db"
+
 
 class Settings(BaseSettings):
     SECRET_KEY: str = secrets.token_hex(32)
@@ -8,7 +11,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 60
     TEMP_TOKEN_EXPIRE_MINUTES: int = 5
 
-    DATABASE_URL: str = "sqlite:////data/app.db"
+    DATABASE_URL: str = DEFAULT_DATABASE_URL
 
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin"

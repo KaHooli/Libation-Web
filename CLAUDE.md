@@ -43,6 +43,21 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 - `POST /api/auth/change-password` — body: `{current_password, new_password}`; revokes all sessions on success
 - `GET /api/auth/sessions` / `DELETE /api/auth/sessions/{id}` / `DELETE /api/auth/sessions` — session management for the logged-in user
 
+## Database backends & migrations
+- **SQLite by default** (`sqlite:////data/app.db`); **PostgreSQL optional** via `DATABASE_URL`. `database.py::normalized_url()` rewrites `postgres://`, `postgresql://` and `postgresql+psycopg2://` to `postgresql+psycopg` (psycopg 3 is bundled); `engine_kwargs()` branches per dialect because `check_same_thread` is a sqlite3 argument that raises on psycopg
+- **Alembic** replaced `Base.metadata.create_all` + the hand-rolled `_migrate_db`. `app/migrations.py::run_migrations()` handles three states: fresh database (run every revision), pre-Alembic database (run `legacy_migrations.migrate_pre_alembic`, stamp `0001`, then upgrade — tables are *adopted*, never rebuilt), and already-migrated (upgrade to head)
+- Revisions live in `backend/alembic/versions/`: `0001_baseline` reproduces the pre-Potation schema exactly; `0002_potation_schema` adds the engine's own tables. `env.py` sets `render_as_batch` for SQLite only
+- `alembic.ini` and `alembic/` are copied to `/app/` in the Dockerfile, beside `app/`, because `migrations.py` resolves them relative to the package parent
+- `seed_system_settings()` uses `ON CONFLICT ... DO NOTHING` rather than SQLite's `INSERT OR IGNORE`, so it runs on both backends
+- Timestamps on Potation tables are `DateTime(timezone=True)`; the older tables store tz-aware values in naive columns (which Postgres silently strips), so `api/downloads.py` re-attaches `timezone.utc` on read. Mixed convention until Phase D drops the old tables
+
+## Potation — native Audible engine (in progress)
+Replaces LibationCli, the `libation-bridge` C# sidecar, and the direct reads of Libation's SQLite. Phase A foundations are in; auth, library sync and reconciliation are next.
+- `services/potation/creds.py` — Fernet encryption for stored Audible credentials. The key is `{LIBATION_CONFIG}/potation.key`, generated 0600 on first use, **not** derived from `SECRET_KEY` so rotating the JWT secret doesn't log out every Audible account. `try_decrypt_json()` returns `None` on a lost key so the account is flagged `needs_reauth` rather than taking startup down
+- `models/potation.py` — `audible_accounts`, `books` (incl. multi-part parent/child), `book_files` (replaces `FileLocationsV2.json`, carries `part_index` so parts don't sort lexically), `audible_licenses` (voucher reuse + `drm_type`), `download_jobs` (state machine, classified `error_code`, `cancel_requested`), `download_quota` (daily-cap ledger), `reconciliation_runs`
+- `books.liberated_override` is tri-state: NULL derives from `book_files`, 1/0 is an explicit user override
+- Tests: `scripts/test-potation.py`, run as `PYTHONPATH=backend python scripts/test-potation.py`. Runs the database section on SQLite always, and on PostgreSQL when `POTATION_TEST_POSTGRES_URL` is set. CI job `potation` runs both and gates `merge`
+
 ## Database (SQLite at `/data/app.db`)
 - `users`: id, username, hashed_password (bcrypt), totp_secret, totp_enabled, is_active, is_admin, permissions (JSON), download_cap (INTEGER), audible_account_id (TEXT), owner_name (TEXT), created_at
 - `sessions`: id, user_id, refresh_token_hash (sha256), expires_at, created_at, last_used_at, ip_address, user_agent
@@ -292,6 +307,7 @@ credentials remain, no real Audible accounts, no real library data, no downloads
 | `./config/LibationContext.db` | Real library data tied to a real Audible account |
 | `./config/FileLocationsV2.json` | Libation's ASIN → file-path cache for a real library |
 | `./config/SearchEngine/` | Lucene index built from real library |
+| `./config/potation.key` | Fernet key that decrypts stored Audible credentials in `audible_accounts.auth_blob` |
 | `./config/logs/` | Log files that may contain real email addresses |
 | `./data/app.db` | Real user accounts and sessions, plus the Chaptarr URL and API key in `system_settings`; container recreates it with default `admin/admin` on next start |
 | `./audiobooks/` (contents) | Downloaded audiobook files — purge all content, keep the directory |

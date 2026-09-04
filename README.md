@@ -85,6 +85,32 @@ Open `http://localhost:8000` — log in with your configured credentials, then g
 
 ---
 
+## Database
+
+SQLite by default — the file lives at `/data/app.db` on the `data` volume and
+needs no configuration.
+
+PostgreSQL is optional. Point `DATABASE_URL` at a server and the app uses it
+instead:
+
+```
+DATABASE_URL=postgresql://libation:libation@postgres:5432/libation
+```
+
+`postgres://` and `postgresql+psycopg2://` are accepted too and normalised to
+the bundled psycopg 3 driver. `docker-compose.yml` ships a commented-out
+`postgres` service you can uncomment.
+
+The schema is created and migrated automatically at startup, on either backend.
+An existing SQLite database from an older version is adopted in place — its
+tables are not rebuilt and no data is moved.
+
+> Switching `DATABASE_URL` between backends points the app at a *different,
+> empty* database; it does not copy your data across. Migrating an existing
+> install means moving the rows yourself.
+
+---
+
 ## Logging
 
 All LibationCLI command output (scans, downloads, account logins) is written to a rotating log file on the `/config` volume, so it survives container restarts and is readable without SSH access — useful for debugging on Unraid.
@@ -181,6 +207,7 @@ Liberate page; it reports the answer and badges the affected books whether or no
 | `REFRESH_TOKEN_EXPIRE_DAYS`   | `60`         | Refresh token / session lifetime                   |
 | `PUID`                        | `1000`       | User ID for file ownership (Unraid: 99)            |
 | `PGID`                        | `1000`       | Group ID for file ownership (Unraid: 100)          |
+| `DATABASE_URL`                | `sqlite:////data/app.db` | Where the app database lives. Leave unset for SQLite on the `/data` volume. To use PostgreSQL instead, set e.g. `postgresql://user:pass@host:5432/libation` — `postgres://` and `postgresql+psycopg2://` are accepted and normalised. The schema is created and migrated automatically on startup |
 
 Generate a strong `SECRET_KEY`:
 ```bash

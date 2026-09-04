@@ -80,6 +80,12 @@
       <Mode/>
     </Variable>
     <Variable>
+      <Value/>
+      <Name>DATABASE_URL</Name>
+      <Description>Optional. Leave blank to use SQLite on the /data volume (recommended). To use an existing PostgreSQL server instead, enter a connection string such as postgresql://user:password@host:5432/libation — the schema is created automatically. Switching this points the app at a different, empty database; it does not move your existing data.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
       <Value>99</Value>
       <Name>PUID</Name>
       <Mode/>
