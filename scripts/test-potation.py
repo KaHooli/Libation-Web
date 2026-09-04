@@ -103,8 +103,8 @@ LEGACY_TABLES = {
     "system_settings",
 }
 
-#: Added by 0003. Kept separate because it belongs to auth, not the engine.
-AUTH_TABLES = {"oidc_login_states"}
+#: Added by 0003/0004.
+AUTH_TABLES = {"oidc_login_states", "audible_login_states"}
 
 
 # ── URL handling and per-backend engine arguments ─────────────────────────────
@@ -353,6 +353,10 @@ def run_database_suite(url: str, label: str) -> dict:
     assert got.astimezone(timezone.utc) == aware, got
     print(f"✓ [{label}] timezone-aware timestamps round-trip intact")
 
+    # The engine services, against a real database on this backend.
+    test_authenticator_storage(engine)
+    test_login_state_lifecycle(engine)
+
     engine.dispose()
     return fresh_fingerprint
 
@@ -465,11 +469,347 @@ def test_credentials() -> None:
     print("✓ try_decrypt_json degrades to None so a lost key flags the account")
 
 
+# ── Marketplace mapping ───────────────────────────────────────────────────────
+
+def test_marketplaces() -> None:
+    from app.services.potation import marketplaces as mk
+
+    # The frontend still sends LibationCli's marketplace names.
+    assert mk.normalize("germany") == "de"
+    assert mk.normalize("us") == "us"
+    assert mk.normalize("UK") == "uk"
+    # Country codes are accepted too, so newer callers are not forced through
+    # the old vocabulary.
+    assert mk.normalize("de") == "de"
+
+    for bad in ("", None, "atlantis", "gb"):
+        try:
+            mk.normalize(bad)
+        except mk.UnknownMarketplace:
+            pass
+        else:
+            raise AssertionError(f"{bad!r} should not be accepted")
+
+    # Every name the API advertises must resolve to a locale the library knows,
+    # because a wrong marketplace fails late — at device registration — with a
+    # sign-in URL that looked perfectly fine.
+    from audible.localization import Locale
+
+    for name in mk.VALID_MARKETPLACES:
+        code = mk.normalize(name)
+        locale = Locale(code)
+        assert locale.domain and locale.market_place_id, (name, code)
+    print(f"✓ all {len(mk.VALID_MARKETPLACES)} marketplaces map to real Audible locales")
+
+
+# ── Audible credential storage ────────────────────────────────────────────────
+
+#: Shaped to satisfy the `audible` library's own field validators.
+FAKE_REGISTRATION = {
+    "adp_token": "{enc:e}{key:k}{iv:i}{name:n}{serial:Mg==}",
+    "device_private_key": (
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJB\n-----END RSA PRIVATE KEY-----\n"
+    ),
+    "access_token": "Atna|fake-access-token",
+    "refresh_token": "Atnr|fake-refresh-token",
+    "expires": 4102444800.0,
+    "website_cookies": {"session": "abc"},
+    "store_authentication_cookie": {"cookie": "def"},
+    "device_info": {"device_serial_number": "SERIAL123"},
+    "customer_info": {"user_id": "amzn1.account.TESTUSER", "name": "Test User"},
+}
+
+
+def test_authenticator_storage(engine) -> None:
+    """A registration survives encryption, storage and rehydration."""
+    from sqlalchemy.orm import sessionmaker
+    from audible import Authenticator
+
+    from app.models.potation import AudibleAccount
+    from app.services.potation import client as client_svc
+    from app.services.potation import creds
+
+    factory = sessionmaker(bind=engine)
+    authenticator = Authenticator.from_dict(FAKE_REGISTRATION, locale="de")
+
+    with factory() as db:
+        account = AudibleAccount(account_id="acct-store", locale="germany")
+        db.add(account)
+        db.commit()
+
+        client_svc.save_authenticator(db, account, authenticator)
+        assert account.auth_blob and "Atna|" not in account.auth_blob, (
+            "the stored blob must not contain readable tokens"
+        )
+        assert account.needs_reauth is False
+
+        restored = client_svc.load_authenticator(db, account)
+        assert restored.access_token == FAKE_REGISTRATION["access_token"]
+        assert restored.locale.country_code == "de", "the marketplace must survive"
+    print("✓ an Audible registration round-trips through encrypted storage")
+
+    # A replaced key must flag the account, not crash the caller.
+    from cryptography.fernet import Fernet
+
+    creds.key_path().write_bytes(Fernet.generate_key())
+    with factory() as db:
+        account = db.query(AudibleAccount).filter(
+            AudibleAccount.account_id == "acct-store"
+        ).first()
+        try:
+            client_svc.load_authenticator(db, account)
+        except client_svc.AccountUnavailable as exc:
+            assert "could not be decrypted" in str(exc), str(exc)
+        else:
+            raise AssertionError("an unreadable blob must raise AccountUnavailable")
+        db.refresh(account)
+        assert account.needs_reauth is True, "the account should be flagged for re-auth"
+
+    # Flagged accounts drop out of the usable set rather than failing later.
+    with factory() as db:
+        assert all(a.account_id != "acct-store" for a in client_svc.active_accounts(db))
+    print("✓ a lost key flags the account and removes it from the usable set")
+
+
+# ── Library sync shaping ──────────────────────────────────────────────────────
+
+def test_library_shaping() -> None:
+    """The pure transform from an Audible library item to our columns."""
+    from app.services.potation import library as lib
+
+    item = {
+        "asin": "B0TEST0001",
+        "title": "The Final Empire",
+        "subtitle": "Mistborn, Book 1",
+        "authors": [{"name": "Brandon Sanderson"}, {"name": None}],
+        "narrators": [{"name": "Michael Kramer"}],
+        "series": [{"title": "Mistborn", "sequence": "1"}],
+        "runtime_length_min": 1467,
+        "language": "english",
+        "format_type": "unabridged",
+        "content_type": "Product",
+        "content_delivery_type": "SinglePartBook",
+        "is_ayce": False,
+        "purchase_date": "2024-03-01T10:00:00Z",
+        "publisher_name": "Macmillan Audio",
+        "merchandising_summary": "A thief tries to overthrow a god.",
+        "product_images": {"500": "https://img/500.jpg", "1215": "https://img/1215.jpg"},
+    }
+
+    class _Row:
+        pass
+
+    book = _Row()
+    lib._apply(book, item, "acct-1")
+    assert book.title == "The Final Empire"
+    assert book.authors == ["Brandon Sanderson"], book.authors
+    assert book.series_name == "Mistborn" and book.series_sequence == "1"
+    assert book.length_minutes == 1467
+    assert book.is_abridged is False
+    assert book.is_audible_plus is False
+    assert book.cover_url == "https://img/1215.jpg", "the largest cover should win"
+    assert book.purchase_date.tzinfo is not None
+    print("✓ a library item maps onto our columns, largest cover and all")
+
+    # Multi-part ordering is by Audible's sort key, never lexical — otherwise
+    # part 10 files reach Chaptarr before part 2.
+    parent = {
+        "asin": "B0PARENT01",
+        "relationships": [
+            {"relationship_type": "component", "relationship_to_product": "child",
+             "asin": "B0PART0010", "sort": "10"},
+            {"relationship_type": "component", "relationship_to_product": "child",
+             "asin": "B0PART0002", "sort": "2"},
+            {"relationship_type": "series", "relationship_to_product": "parent",
+             "asin": "B0SERIES01"},
+        ],
+    }
+    parts = lib._child_parts(parent)
+    assert [p["asin"] for p in parts] == ["B0PART0002", "B0PART0010"], parts
+    print("✓ multi-part children order numerically, not lexically")
+
+
+# ── License parsing and the census verdict ────────────────────────────────────
+
+def _license_payload(drm_type, *, expires=4102444800):
+    return {"content_license": {
+        "drm_type": drm_type,
+        "status_code": "Granted",
+        "license_response": "encrypted-voucher-blob",
+        "refresh_date": "2026-10-01T00:00:00Z",
+        "content_metadata": {
+            "content_reference": {
+                "acr": "CR!ABC", "version": "1", "content_format": "AAX_22_64",
+            },
+            "content_url": {
+                "offline_url": f"https://cds.audible.com/x.aaxc?Expires={expires}&Key=v",
+            },
+        },
+    }}
+
+
+def test_license_parsing() -> None:
+    from app.services.potation import license as lic
+
+    info = lic.parse_license("B0TEST0001", _license_payload("Adrm"))
+    assert info.drm_type == "Adrm"
+    assert info.natively_downloadable is True
+    assert info.acr == "CR!ABC" and info.content_format == "AAX_22_64"
+    assert info.has_voucher is True
+    assert info.url_expires_at is not None and info.url_expires_at.tzinfo is not None
+    assert info.refresh_date is not None
+    print("✓ a license response parses, including the CDN link's own expiry")
+
+    assert lic.parse_license("x", _license_payload("Widevine")).natively_downloadable is False
+    assert lic.parse_license("x", _license_payload("Mpeg")).natively_downloadable is True
+    assert lic.parse_license("x", {}).drm_type is None
+    print("✓ Widevine is recognised as out of reach, unencrypted delivery as in reach")
+
+
+def test_census_verdict() -> None:
+    from collections import Counter
+    from app.services.potation.license import DrmCensus
+
+    clean = DrmCensus(sampled=25, counts=Counter({"Adrm": 24, "Mpeg": 1}))
+    assert clean.blocked_fraction == 0.0
+    assert "Nothing in this sample needs LibationCli" in clean.verdict()
+
+    marginal = DrmCensus(sampled=100, counts=Counter({"Adrm": 98, "Widevine": 2}))
+    assert 0 < marginal.blocked_fraction < 0.05
+    assert "exception rather than a blocker" in marginal.verdict()
+
+    blocking = DrmCensus(sampled=100, counts=Counter({"Adrm": 80, "Widevine": 20}))
+    assert blocking.blocked_fraction == 0.2
+    assert "change the plan" in blocking.verdict()
+
+    # Failures must not be counted as if they were answers.
+    noisy = DrmCensus(sampled=10, counts=Counter({"Adrm": 5}),
+                      failures=[(f"B{i}", "denied") for i in range(5)])
+    assert noisy.blocked_fraction == 0.0, noisy.blocked_fraction
+    empty = DrmCensus(sampled=3, failures=[("a", "x"), ("b", "x"), ("c", "x")])
+    assert "no answers" in empty.verdict()
+    print("✓ the census verdict reflects the sample, and failures are not answers")
+
+
+# ── Sign-in URL safety ────────────────────────────────────────────────────────
+
+def test_login_url_validation() -> None:
+    from app.services.potation import auth as pauth
+
+    # A real URL for every marketplace must pass the guard.
+    from audible.localization import Locale
+    from audible.login import build_oauth_url, create_code_verifier
+    from app.services.potation.marketplaces import VALID_MARKETPLACES, normalize
+
+    for name in sorted(VALID_MARKETPLACES):
+        locale = Locale(normalize(name))
+        url, _ = build_oauth_url(
+            country_code=locale.country_code, domain=locale.domain,
+            market_place_id=locale.market_place_id, code_verifier=create_code_verifier(),
+        )
+        pauth._reject_malformed(url, name)
+
+    # The two failures the old implementation shipped: an empty top-level domain
+    # from an unrecognised marketplace, and a truncated URL missing its OAuth
+    # parameters. Both look like ordinary links.
+    for bad in (
+        "https://www.amazon./ap/signin?openid.oa2.code_challenge=x&openid.oa2.client_id=y",
+        "https://www.amazon.de/ap/signin?openid.mode=checkid_setup",
+    ):
+        try:
+            pauth._reject_malformed(bad, "us")
+        except pauth.AudibleAuthError:
+            pass
+        else:
+            raise AssertionError(f"should have been rejected: {bad}")
+    print("✓ malformed sign-in URLs are refused before a user can try them")
+
+
+def test_authorization_code_extraction() -> None:
+    from app.services.potation import auth as pauth
+
+    good = ("https://www.amazon.de/ap/maplanding?openid.oa2.authorization_code=ANiceCode"
+            "&openid.mode=id_res")
+    assert pauth.extract_authorization_code(good) == "ANiceCode"
+
+    for bad in ("", "not a url", "https://www.amazon.de/ap/signin?openid.mode=id_res"):
+        try:
+            pauth.extract_authorization_code(bad)
+        except pauth.AudibleAuthError as exc:
+            assert "authorization code" in str(exc)
+        else:
+            raise AssertionError(f"should have been rejected: {bad!r}")
+    print("✓ the pasted response URL is validated before registration is attempted")
+
+
+def test_login_state_lifecycle(engine) -> None:
+    """A pending sign-in is single-use and expires — no held-open subprocess."""
+    from datetime import timedelta
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.potation import AudibleLoginState
+    from app.services.potation import auth as pauth
+    from app.services.potation import creds
+
+    factory = sessionmaker(bind=engine)
+    with factory() as db:
+        started = pauth.begin_login(db, marketplace="us", email="reader@example.com")
+        assert started["login_url"].startswith("https://www.amazon.com/"), started["login_url"]
+
+        row = db.query(AudibleLoginState).filter(
+            AudibleLoginState.state == started["session_id"]
+        ).first()
+        assert row is not None and row.consumed_at is None
+        assert row.country_code == "us" and row.marketplace == "us"
+        # The verifier is in-flight secret material, so it is not stored bare.
+        assert creds.decrypt(row.code_verifier), "the verifier should be recoverable"
+        assert "code_verifier" not in row.code_verifier
+
+        # Completing consumes the row before any exchange is attempted, so a
+        # double submit cannot register two devices.
+        pauth._consume_state(db, started["session_id"])
+        try:
+            pauth._consume_state(db, started["session_id"])
+        except pauth.AudibleAuthError as exc:
+            assert "already been used" in str(exc), str(exc)
+        else:
+            raise AssertionError("a consumed sign-in must not be reusable")
+
+        # And an unknown handle is refused outright.
+        try:
+            pauth._consume_state(db, "never-issued")
+        except pauth.AudibleAuthError as exc:
+            assert "not found" in str(exc)
+        else:
+            raise AssertionError("an unknown session must be refused")
+
+        # Expiry is enforced server-side.
+        stale = pauth.begin_login(db, marketplace="uk")
+        row = db.query(AudibleLoginState).filter(
+            AudibleLoginState.state == stale["session_id"]
+        ).first()
+        row.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db.commit()
+        try:
+            pauth._consume_state(db, stale["session_id"])
+        except pauth.AudibleAuthError as exc:
+            assert "too long" in str(exc), str(exc)
+        else:
+            raise AssertionError("an expired sign-in must be refused")
+    print("✓ pending sign-ins are single-use, expiring rows rather than live subprocesses")
+
+
 def main() -> None:
     test_url_normalisation()
     test_engine_kwargs()
     test_db_directory_is_sqlite_only()
     test_credentials()
+    test_marketplaces()
+    test_library_shaping()
+    test_license_parsing()
+    test_census_verdict()
+    test_login_url_validation()
+    test_authorization_code_extraction()
 
     sqlite_url = f"sqlite:///{DATA / 'lifecycle.db'}"
     fresh = run_database_suite(sqlite_url, "sqlite")

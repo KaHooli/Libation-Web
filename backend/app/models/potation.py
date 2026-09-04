@@ -67,6 +67,33 @@ ERR_UNKNOWN = "unknown"
 RETRYABLE_ERRORS = frozenset({ERR_NETWORK, ERR_UNKNOWN})
 
 
+class AudibleLoginState(Base):
+    """One in-flight Audible device-registration flow.
+
+    The PKCE verifier and device serial have to survive the round trip through
+    Amazon's sign-in page, which spans two separate HTTP requests to us. The old
+    implementation kept a live `libationcli login-external` subprocess in a
+    module-level dict for up to ten minutes; a row is strictly better — it
+    survives a restart, works across workers, and holds no file descriptors.
+    """
+
+    __tablename__ = "audible_login_states"
+
+    id = Column(Integer, primary_key=True)
+    state = Column(String, unique=True, nullable=False, index=True)
+    email = Column(String, nullable=True)
+    marketplace = Column(String, nullable=False)
+    country_code = Column(String, nullable=False)
+    code_verifier = Column(Text, nullable=False)
+    serial = Column(String, nullable=False)
+    domain = Column(String, nullable=False)
+    #: Which web-UI user started this, so the account can be attributed.
+    started_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class AudibleAccount(Base):
     """A connected Audible account. Replaces `AccountsSettings.json` and the
     hand-rolled `audible_account_settings` table."""
