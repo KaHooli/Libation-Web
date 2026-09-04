@@ -41,8 +41,22 @@ api.interceptors.response.use(
   }
 );
 
+export interface AuthConfig {
+  password_login_enabled: boolean;
+  oidc_enabled: boolean;
+  oidc_provider_name: string;
+}
+
+/** Where the browser goes to start SSO. A full navigation, never an XHR —
+ *  the response is a redirect to the identity provider. */
+export const OIDC_LOGIN_URL = "/api/auth/oidc/login";
+
 // Auth API
 export const authApi = {
+  /** Which sign-in methods this deployment offers. Unauthenticated by
+   *  necessity: the login page needs it before anyone has credentials. */
+  config: () => axios.get<AuthConfig>("/api/auth/config"),
+
   login: (username: string, password: string) =>
     api.post("/auth/login", { username, password }),
 

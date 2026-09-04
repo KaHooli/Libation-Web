@@ -88,6 +88,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Application code
 COPY backend/app ./app
 
+# Alembic migrations. `app/migrations.py` resolves these relative to the package
+# parent, so alembic.ini must sit beside `app/` — i.e. at /app/alembic.ini.
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/alembic ./alembic
+
 # Built frontend (served as static files by FastAPI)
 COPY --from=frontend-builder /frontend/dist ./static
 

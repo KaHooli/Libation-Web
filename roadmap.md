@@ -194,9 +194,16 @@
 ### React resilience ✅
 - [x] Root `ErrorBoundary` component wraps the whole app — catches render crashes instead of leaving a blank white page with a dead back button
 
-### Docker Hub publishing ✅
-- [x] Image published to Docker Hub (`jtechguru1993/libation-web:latest`) on every push
+### Docker Hub publishing ~~✅~~ (superseded by GHCR)
+- [x] Image published to Docker Hub (`jtechguru1993/libation-web:latest`)
 - [x] README and Unraid template updated to reference Docker Hub
+
+> **Superseded.** No workflow in this repository pushes to Docker Hub — only
+> `docker-ghcr.yml`, which publishes `ghcr.io/kahooli/libation-web` on every push
+> to `main`. If Docker Hub was ever kept current it was by a mechanism outside
+> this repo (a Docker Hub autobuild, or by hand), and it is not guaranteed to
+> match `main`. The README and Unraid template now point at GHCR, which is
+> public and needs no `docker login`.
 
 ### Branding fix ✅
 - [x] Replaced default favicon and sidebar headphones icon with official Libation branding (`libation_logo_dark.svg` for sidebar, `favicon.svg` + `libation.ico` fallback for browser tab)

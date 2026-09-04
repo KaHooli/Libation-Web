@@ -24,3 +24,7 @@ Thumbs.db
 
 # Claude Code tooling
 .omc/
+
+# Scratch workspace for scripts/potation-census.py — holds a local database and
+# potation.key, both of which contain live Audible credentials.
+.potation-census/

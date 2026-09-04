@@ -80,8 +80,11 @@ async def login_complete(
             if aid not in existing:
                 conn.execute(
                     text(
-                        "INSERT OR IGNORE INTO audible_account_settings "
-                        "(account_id, added_by_user_id, auto_download) VALUES (:aid, :uid, 0)"
+                        # ON CONFLICT rather than SQLite's INSERT OR IGNORE, so
+                        # the statement also runs on PostgreSQL.
+                        "INSERT INTO audible_account_settings "
+                        "(account_id, added_by_user_id, auto_download) VALUES (:aid, :uid, 0) "
+                        "ON CONFLICT (account_id) DO NOTHING"
                     ),
                     {"aid": aid, "uid": current_user.id},
                 )

@@ -9,6 +9,9 @@ interface User {
   audible_account_id: string | null;
   download_cap: number | null;
   permissions: Record<string, boolean> | null;
+  /** Signs in through the identity provider, so password and 2FA controls
+   *  do not apply to this account. */
+  is_sso_user?: boolean;
 }
 
 interface AuthContextValue {

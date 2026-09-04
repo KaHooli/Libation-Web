@@ -10,10 +10,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .database import engine, SessionLocal, Base, ensure_db_directory
+from .database import SessionLocal, ensure_db_directory
+from .migrations import run_migrations, seed_system_settings
 from .models import user as user_models  # noqa: F401 — registers models
 from .models import download as download_models  # noqa: F401 — registers models
 from .models import chaptarr as chaptarr_models  # noqa: F401 — registers models
+from .models import potation as potation_models  # noqa: F401 — registers models
 from .models.download import Scan, Download
 from .api import auth as auth_router
 from .api import library as library_router
@@ -26,7 +28,6 @@ from .api import updates as updates_router
 from .api import logs as logs_router
 from .api import chaptarr as chaptarr_router
 from .services.auth import hash_password, get_user_by_username
-from .services.chaptarr import SETTING_KEYS as CHAPTARR_SETTING_KEYS
 from .services.logger import get_logger
 from .models.user import User
 from .config import settings
@@ -34,51 +35,6 @@ from .limiter import limiter
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-
-
-def _migrate_db(db: Session) -> None:
-    """Add columns that were introduced after initial deployment."""
-    conn = db.connection()
-    users_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
-    if "is_admin" not in users_cols:
-        conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"))
-        conn.execute(text("UPDATE users SET is_admin = 1 WHERE username = :u"), {"u": settings.ADMIN_USERNAME})
-        db.commit()
-        print("[Libation] Migrated: added is_admin column")
-    if "permissions" not in users_cols:
-        conn.execute(text("ALTER TABLE users ADD COLUMN permissions TEXT"))
-        db.commit()
-        print("[Libation] Migrated: added permissions column")
-    if "download_cap" not in users_cols:
-        conn.execute(text("ALTER TABLE users ADD COLUMN download_cap INTEGER"))
-        db.commit()
-        print("[Libation] Migrated: added download_cap column")
-    if "audible_account_id" not in users_cols:
-        conn.execute(text("ALTER TABLE users ADD COLUMN audible_account_id TEXT"))
-        db.commit()
-        print("[Libation] Migrated: added audible_account_id column")
-    if "owner_name" not in users_cols:
-        conn.execute(text("ALTER TABLE users ADD COLUMN owner_name TEXT"))
-        db.commit()
-        print("[Libation] Migrated: added owner_name column")
-
-    conn.execute(text(
-        "CREATE TABLE IF NOT EXISTS audible_account_settings "
-        "(account_id TEXT PRIMARY KEY, added_by_user_id INTEGER, auto_download INTEGER NOT NULL DEFAULT 0)"
-    ))
-    conn.execute(text(
-        "CREATE TABLE IF NOT EXISTS system_settings "
-        "(key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')"
-    ))
-    conn.execute(text(
-        "INSERT OR IGNORE INTO system_settings (key, value) VALUES ('last_auto_download_at', '')"
-    ))
-    for key, default in CHAPTARR_SETTING_KEYS.items():
-        conn.execute(
-            text("INSERT OR IGNORE INTO system_settings (key, value) VALUES (:k, :v)"),
-            {"k": key, "v": default},
-        )
-    db.commit()
 
 
 def _seed_admin(db: Session) -> None:
@@ -117,11 +73,11 @@ def _seed_admin(db: Session) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_db_directory()
-    Base.metadata.create_all(bind=engine)
+    run_migrations()
     logger = get_logger()
     logger.info("[startup] Libation Web UI starting up")
     with SessionLocal() as db:
-        _migrate_db(db)
+        seed_system_settings(db)
         _seed_admin(db)
         now = datetime.now(timezone.utc)
         stuck_scans = db.query(Scan).filter(Scan.status == "running").all()

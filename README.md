@@ -30,17 +30,16 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 
 ## Images
 
-The image is published to two registries — use whichever you prefer:
+```
+ghcr.io/kahooli/libation-web:latest
+```
 
-| Registry | Image |
-|----------|-------|
-| Docker Hub | `jtechguru1993/libation-web:latest` |
-| GitHub Container Registry | `ghcr.io/kahooli/libation-web:latest` |
+Public — no `docker login` needed, and no registry credentials to configure on
+Unraid. A `linux/amd64` + `linux/arm64` multi-arch manifest.
 
-Both are `linux/amd64` + `linux/arm64` multi-arch manifests. The GHCR image is
-built and pushed automatically by
+Built and pushed automatically by
 [`.github/workflows/docker-ghcr.yml`](.github/workflows/docker-ghcr.yml) on every
-push to `main`, in addition to these tags:
+push to `main`, which produces these tags:
 
 | Tag | Produced by |
 |-----|-------------|
@@ -49,14 +48,11 @@ push to `main`, in addition to these tags:
 | `sha-<full-commit-sha>` | every push, for pinning an exact build |
 | `1.2.3`, `1.2` | pushing a `v1.2.3` git tag |
 
-> **The GHCR package is private.** Authenticate before pulling:
->
-> ```bash
-> echo "$GITHUB_PAT" | docker login ghcr.io -u KaHooli --password-stdin
-> ```
->
-> The PAT needs the `read:packages` scope. On Unraid, add the same registry
-> credentials under **Docker → Add Container → Registry Authentication**.
+Pull requests build the image and run the full test suite, but publish no tags —
+only `main` and version tags produce something you can pull.
+
+> **Docker Hub** (`jtechguru1993/libation-web`) is **not** updated by CI and is
+> likely behind. Use the GHCR image above.
 
 ---
 
@@ -82,6 +78,99 @@ Open `http://localhost:8000` — log in with your configured credentials, then g
 | `./data`       | `/data`       | App database (users, sessions)       |
 | `./config`     | `/config`     | Libation config + `LibationContext.db`  |
 | `./audiobooks` | `/audiobooks` | Downloaded audiobook files           |
+
+---
+
+## Database
+
+SQLite by default — the file lives at `/data/app.db` on the `data` volume and
+needs no configuration.
+
+PostgreSQL is optional. Point `DATABASE_URL` at a server and the app uses it
+instead:
+
+```
+DATABASE_URL=postgresql://libation:libation@postgres:5432/libation
+```
+
+`postgres://` and `postgresql+psycopg2://` are accepted too and normalised to
+the bundled psycopg 3 driver. `docker-compose.yml` ships a commented-out
+`postgres` service you can uncomment.
+
+The schema is created and migrated automatically at startup, on either backend.
+An existing SQLite database from an older version is adopted in place — its
+tables are not rebuilt and no data is moved.
+
+> Switching `DATABASE_URL` between backends points the app at a *different,
+> empty* database; it does not copy your data across. Migrating an existing
+> install means moving the rows yourself.
+
+---
+
+## Single sign-on (OIDC)
+
+Any OpenID Connect provider works — Authelia, Authentik, Keycloak, Pocket ID,
+Entra ID, Google. The standard authorization-code flow with PKCE is used, and
+the ID token is verified against the provider's published signing keys.
+
+**Setup**
+
+1. Register a confidential client with your provider. Set its redirect URI to
+   `https://your-host/api/auth/oidc/callback`.
+2. Set at least these four variables and restart:
+
+   ```
+   OIDC_ENABLED=true
+   OIDC_ISSUER=https://auth.example.com
+   OIDC_CLIENT_ID=libation-web
+   OIDC_CLIENT_SECRET=...
+   ```
+
+   `OIDC_ISSUER` is the base URL — discovery is read from
+   `{issuer}/.well-known/openid-configuration`.
+3. Behind a reverse proxy, also set `OIDC_REDIRECT_URL` to the exact callback
+   URL you registered. Without it the URL is derived from the incoming request,
+   which gets the internal scheme and host wrong.
+
+**Password sign-in turns itself off**
+
+Once SSO is fully configured, username/password sign-in is disabled — there is
+no point leaving a second door open. `ALLOW_PASSWORD_LOGIN=true` brings it back
+if you want both, and it is the way back in if the provider is misconfigured and
+nobody can sign in.
+
+A half-filled configuration never disables password login: all four of the
+variables above must be set before SSO counts as configured, so a typo in the
+issuer cannot lock you out.
+
+**Accounts**
+
+Users are matched on the provider's `sub` claim, which is the only identifier a
+provider guarantees is stable. On a first sign-in, an existing local account with
+the same email or username is linked; otherwise a new one is created (turn that
+off with `OIDC_AUTO_CREATE_USERS=false` to restrict SSO to accounts you have
+already made). An account already linked to a different SSO identity is never
+taken over.
+
+Set `OIDC_ADMIN_GROUP` to have membership of a group grant admin on every sign-in
+— and revoke it when the user leaves that group. Leave it blank to manage admin
+rights in the app instead.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OIDC_ENABLED` | `false` | Turn SSO on |
+| `OIDC_ISSUER` | — | Provider base URL |
+| `OIDC_CLIENT_ID` | — | Client id |
+| `OIDC_CLIENT_SECRET` | — | Client secret |
+| `OIDC_REDIRECT_URL` | derived | Exact callback URL; **required behind a proxy** |
+| `OIDC_SCOPES` | `openid profile email` | Requested scopes |
+| `OIDC_PROVIDER_NAME` | `SSO` | Label on the sign-in button |
+| `OIDC_USERNAME_CLAIM` | `preferred_username` | Claim used for the username |
+| `OIDC_EMAIL_CLAIM` | `email` | Claim used for the email |
+| `OIDC_GROUPS_CLAIM` | `groups` | Claim holding group membership |
+| `OIDC_ADMIN_GROUP` | — | Members of this group become admins |
+| `OIDC_AUTO_CREATE_USERS` | `true` | Create a local user on first sign-in |
+| `ALLOW_PASSWORD_LOGIN` | auto | Force password sign-in on or off |
 
 ---
 
@@ -181,6 +270,8 @@ Liberate page; it reports the answer and badges the affected books whether or no
 | `REFRESH_TOKEN_EXPIRE_DAYS`   | `60`         | Refresh token / session lifetime                   |
 | `PUID`                        | `1000`       | User ID for file ownership (Unraid: 99)            |
 | `PGID`                        | `1000`       | Group ID for file ownership (Unraid: 100)          |
+| `DATABASE_URL`                | `sqlite:////data/app.db` | Where the app database lives. Leave unset for SQLite on the `/data` volume. To use PostgreSQL instead, set e.g. `postgresql://user:pass@host:5432/libation` — `postgres://` and `postgresql+psycopg2://` are accepted and normalised. The schema is created and migrated automatically on startup |
+| `OIDC_*`, `ALLOW_PASSWORD_LOGIN` | off | Single sign-on — see [Single sign-on (OIDC)](#single-sign-on-oidc) |
 
 Generate a strong `SECRET_KEY`:
 ```bash
@@ -191,9 +282,8 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Installing on Unraid
 
-> **Note:** The image is published to Docker Hub as `jtechguru1993/libation-web:latest`
-> and to GHCR as `ghcr.io/kahooli/libation-web:latest` (private — see
-> [Images](#images) for the `docker login` step).
+> **Note:** The image is `ghcr.io/kahooli/libation-web:latest`. It is public, so
+> there is nothing to fill in under **Registry Authentication**.
 
 ### Step 1 — Add the container
 
@@ -205,7 +295,7 @@ Fill in these basic fields:
 | Field | Value |
 |-------|-------|
 | Name | `LibationWeb` |
-| Repository | `jtechguru1993/libation-web:latest` |
+| Repository | `ghcr.io/kahooli/libation-web:latest` |
 | Network Type | `Bridge` |
 | Web UI | `http://[IP]:[PORT:8000]/` |
 
