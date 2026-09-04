@@ -30,17 +30,16 @@ A Dockerized web UI wrapper for [Libation](https://github.com/rmcrackan/Libation
 
 ## Images
 
-The image is published to two registries — use whichever you prefer:
+```
+ghcr.io/kahooli/libation-web:latest
+```
 
-| Registry | Image |
-|----------|-------|
-| Docker Hub | `jtechguru1993/libation-web:latest` |
-| GitHub Container Registry | `ghcr.io/kahooli/libation-web:latest` |
+Public — no `docker login` needed, and no registry credentials to configure on
+Unraid. A `linux/amd64` + `linux/arm64` multi-arch manifest.
 
-Both are `linux/amd64` + `linux/arm64` multi-arch manifests. The GHCR image is
-built and pushed automatically by
+Built and pushed automatically by
 [`.github/workflows/docker-ghcr.yml`](.github/workflows/docker-ghcr.yml) on every
-push to `main`, in addition to these tags:
+push to `main`, which produces these tags:
 
 | Tag | Produced by |
 |-----|-------------|
@@ -49,14 +48,11 @@ push to `main`, in addition to these tags:
 | `sha-<full-commit-sha>` | every push, for pinning an exact build |
 | `1.2.3`, `1.2` | pushing a `v1.2.3` git tag |
 
-> **The GHCR package is private.** Authenticate before pulling:
->
-> ```bash
-> echo "$GITHUB_PAT" | docker login ghcr.io -u KaHooli --password-stdin
-> ```
->
-> The PAT needs the `read:packages` scope. On Unraid, add the same registry
-> credentials under **Docker → Add Container → Registry Authentication**.
+Pull requests build the image and run the full test suite, but publish no tags —
+only `main` and version tags produce something you can pull.
+
+> **Docker Hub** (`jtechguru1993/libation-web`) is **not** updated by CI and is
+> likely behind. Use the GHCR image above.
 
 ---
 
@@ -286,9 +282,8 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Installing on Unraid
 
-> **Note:** The image is published to Docker Hub as `jtechguru1993/libation-web:latest`
-> and to GHCR as `ghcr.io/kahooli/libation-web:latest` (private — see
-> [Images](#images) for the `docker login` step).
+> **Note:** The image is `ghcr.io/kahooli/libation-web:latest`. It is public, so
+> there is nothing to fill in under **Registry Authentication**.
 
 ### Step 1 — Add the container
 
@@ -300,7 +295,7 @@ Fill in these basic fields:
 | Field | Value |
 |-------|-------|
 | Name | `LibationWeb` |
-| Repository | `jtechguru1993/libation-web:latest` |
+| Repository | `ghcr.io/kahooli/libation-web:latest` |
 | Network Type | `Bridge` |
 | Web UI | `http://[IP]:[PORT:8000]/` |
 
