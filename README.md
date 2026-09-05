@@ -51,8 +51,9 @@ push to `main`, which produces these tags:
 Pull requests build the image and run the full test suite, but publish no tags —
 only `main` and version tags produce something you can pull.
 
-> **Docker Hub** (`jtechguru1993/libation-web`) is **not** updated by CI and is
-> likely behind. Use the GHCR image above.
+> **Docker Hub is no longer used.** `jtechguru1993/libation-web` is not built by
+> this repository and will not be updated. If you installed from it, change your
+> container's repository to the GHCR image above — everything else stays the same.
 
 ---
 
