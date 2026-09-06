@@ -371,6 +371,18 @@ After deleting the above, restart the container (`docker compose restart`). On s
 
 > **Important:** Always do a final `docker compose restart` after sanitizing, even if the container was already restarted mid-process. Deleting `app.db` while the container is live causes a disk I/O error on the stale file handle; the entrypoint restart loop recovers and re-seeds the DB, but a subsequent sanitization pass will delete that freshly-seeded file too — leaving the container running with no database and login broken. The final restart ensures `app.db` is cleanly re-created after all deletions are complete.
 
+## Pull request workflow
+**Merge a PR as soon as it is green — don't wait to be asked.** Open it as a draft, then once CI passes: mark it ready for review and merge it. No confirmation step.
+
+What "green" means here:
+- Every job in `.github/workflows/docker-ghcr.yml` that actually ran has `conclusion: success`. **`merge` reporting `skipped` on a PR is expected, not a failure** — that job is gated on `github.event_name != 'pull_request'` and only runs on a push to `main`.
+- `mergeable_state` is `clean` (no conflict with `main`).
+- No unresolved review comments.
+
+Anything short of that is work, not a reason to wait: fix it and push. Merge with `expectedHeadSha` pinned to the commit whose CI you actually verified, so a race can't merge something unverified. Afterwards, reset the working branch onto the new `main` (`git checkout -B <branch> origin/main`) and confirm the `main` publish republished the GHCR tags to a fresh digest.
+
+This is a single-maintainer repository and there is no human review gate; the CI suites (`chaptarr`, `liberate`, `reconcile`, `potation`, `oidc`, `smoke`) are the gate. Adding a check to one of them is how you make a new invariant enforceable.
+
 ## Conventions
 - API routes: `/api/<resource>/<action>`
 - All API responses use snake_case JSON
