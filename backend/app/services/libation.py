@@ -1,7 +1,8 @@
 import json
+import re
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from ..config import settings
 
@@ -162,6 +163,73 @@ def _v13_row_to_book(r: sqlite3.Row) -> dict:
     return d
 
 
+# ── Liberate filtering ────────────────────────────────────────────────────────
+#
+# The status shown on the Liberate page is derived, not stored: it comes from
+# UserDefinedItem.BookStatus, overlaid with any download that is currently
+# queued or running. The filter has to reproduce that derivation *in SQL*, in
+# one place shared by the grid and by "Select All" — filtering a page in Python
+# after LIMIT/OFFSET leaves `total` counting the books the filter removed, so
+# the count, the page links and the selection all disagree.
+
+# Both mirror the corresponding expressions in `_v13_selects` / the raw_status
+# select below, so a filter can never disagree with the badge on the row.
+_RAW_STATUS = (
+    "COALESCE((SELECT u.BookStatus FROM UserDefinedItem u WHERE u.BookId=b.BookId), 0)"
+)
+_IS_AUDIBLE_PLUS = (
+    "COALESCE((SELECT lb.IsAudiblePlus FROM LibraryBooks lb "
+    "WHERE lb.BookId=b.BookId LIMIT 1), 0)"
+)
+
+# `_v13_row_to_book` renders BookStatus 1 as liberated and 2 as error; every
+# other value falls through to not_liberated.
+_STATUS_LIBERATED, _STATUS_ERROR = 1, 2
+
+# Tabs that name a download state, and so have to yield to a download in flight.
+# Ownership tabs (audible_plus / purchased) are a different axis and must not.
+_DOWNLOAD_STATE_TABS = frozenset({"liberated", "not_liberated", "error"})
+
+
+def _liberate_filter(
+    filter_status: str, active_ids: Optional[Iterable[str]] = None
+) -> list[tuple[str, list]]:
+    """WHERE fragments for one Liberate filter tab, each with its own params.
+
+    Returned in order so a caller can append fragments and extend its params
+    list in lockstep. An unrecognised tab matches nothing rather than silently
+    matching everything — the latter is how a bad filter would hand the whole
+    library to a bulk download.
+    """
+    # Drop blanks: these are `downloads.book_id` values, and one NULL row would
+    # otherwise fail the sort and take the whole query down with it.
+    active = sorted({i for i in (active_ids or ()) if i})
+    marks = ", ".join(["?"] * len(active))
+
+    if filter_status == "all":
+        return []
+    if filter_status == "downloading":
+        # No active downloads means nothing is downloading, so match nothing.
+        return [(f"b.AudibleProductId IN ({marks})", active)] if active else [("1 = 0", [])]
+
+    if filter_status == "liberated":
+        parts = [(f"{_RAW_STATUS} = {_STATUS_LIBERATED}", [])]
+    elif filter_status == "not_liberated":
+        parts = [(f"{_RAW_STATUS} NOT IN ({_STATUS_LIBERATED}, {_STATUS_ERROR})", [])]
+    elif filter_status == "error":
+        parts = [(f"{_RAW_STATUS} = {_STATUS_ERROR}", [])]
+    elif filter_status == "audible_plus":
+        parts = [(f"{_IS_AUDIBLE_PLUS} = 1", [])]
+    elif filter_status == "purchased":
+        parts = [(f"{_IS_AUDIBLE_PLUS} = 0", [])]
+    else:
+        return [("1 = 0", [])]
+
+    if active and filter_status in _DOWNLOAD_STATE_TABS:
+        parts.append((f"b.AudibleProductId NOT IN ({marks})", active))
+    return parts
+
+
 # ── Public query functions ────────────────────────────────────────────────────
 
 def get_library(
@@ -248,10 +316,7 @@ def get_liberate_books(
 
         if _is_v13(sc):
             selects = _v13_selects(include_description=False)
-            selects.append(
-                "COALESCE((SELECT u.BookStatus FROM UserDefinedItem u "
-                " WHERE u.BookId=b.BookId), 0) AS raw_status"
-            )
+            selects.append(f"{_RAW_STATUS} AS raw_status")
             where_parts: list[str] = []
             base_params: list = []
             if account_id:
@@ -260,6 +325,9 @@ def get_liberate_books(
             if search:
                 where_parts.append("b.Title LIKE ?")
                 base_params.append(f"%{search}%")
+            for fragment, fragment_params in _liberate_filter(filter_status, active):
+                where_parts.append(fragment)
+                base_params.extend(fragment_params)
             where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
             total = conn.execute(f"SELECT COUNT(*) FROM Books b {where}", base_params).fetchone()[0]
             offset = (page - 1) * page_size
@@ -273,23 +341,18 @@ def get_liberate_books(
             books = []
             for r in rows:
                 d = _v13_row_to_book(r)
+                raw = d.pop("raw_status", 0)
                 bid = d["book_id"]
                 if bid in active:
                     _, progress = active[bid]
                     d["liberate_status"] = "downloading"
                     d["download_progress"] = progress
                 else:
-                    raw = d.pop("raw_status", 0)
-                    d["liberate_status"] = {1: "liberated", 2: "error"}.get(raw, "not_liberated")
+                    d["liberate_status"] = {
+                        _STATUS_LIBERATED: "liberated", _STATUS_ERROR: "error",
+                    }.get(raw, "not_liberated")
                     d["download_progress"] = None
                 books.append(d)
-
-            if filter_status == "audible_plus":
-                books = [b for b in books if b.get("is_audible_plus")]
-            elif filter_status == "purchased":
-                books = [b for b in books if not b.get("is_audible_plus")]
-            elif filter_status != "all":
-                books = [b for b in books if b["liberate_status"] == filter_status]
 
             return {"books": books, "total": total, "page": page, "page_size": page_size}
         else:
@@ -361,7 +424,11 @@ def get_liberate_book_ids(
     active_download_ids: Optional[set] = None,
     search: str = "",
 ) -> list:
-    """Return every AudibleProductId matching the filter, with no pagination."""
+    """Return every AudibleProductId matching the filter, with no pagination.
+
+    Shares `_liberate_filter` with `get_liberate_books`, so "Select All (N)"
+    cannot select a different set from the one the grid is showing.
+    """
     if not db_exists():
         return []
     try:
@@ -380,27 +447,13 @@ def get_liberate_book_ids(
             )
             params.append(account_id)
 
-        if filter_status == "liberated":
-            where_parts.append(
-                "COALESCE((SELECT u.BookStatus FROM UserDefinedItem u WHERE u.BookId=b.BookId), 0) = 1"
-            )
-        elif filter_status == "not_liberated":
-            where_parts.append(
-                "COALESCE((SELECT u.BookStatus FROM UserDefinedItem u WHERE u.BookId=b.BookId), 0) = 0"
-            )
-        elif filter_status == "audible_plus":
-            where_parts.append(
-                "EXISTS (SELECT 1 FROM LibraryBooks lb WHERE lb.BookId=b.BookId AND lb.IsAudiblePlus=1)"
-            )
-        elif filter_status == "purchased":
-            where_parts.append(
-                "EXISTS (SELECT 1 FROM LibraryBooks lb WHERE lb.BookId=b.BookId AND lb.IsAudiblePlus=0)"
-            )
-
         if search:
             where_parts.append("b.Title LIKE ?")
             params.append(f"%{search}%")
-        # "all" and "downloading" handled below
+
+        for fragment, fragment_params in _liberate_filter(filter_status, active_download_ids):
+            where_parts.append(fragment)
+            params.extend(fragment_params)
 
         where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
         rows = conn.execute(
@@ -408,12 +461,7 @@ def get_liberate_book_ids(
         ).fetchall()
         conn.close()
 
-        ids = [r[0] for r in rows if r[0]]
-
-        if filter_status == "downloading" and active_download_ids is not None:
-            ids = [i for i in ids if i in active_download_ids]
-
-        return ids
+        return [r[0] for r in rows if r[0]]
     except Exception:
         return []
 
@@ -563,6 +611,26 @@ def _is_audio(entry: dict) -> bool:
     return bool(path) and Path(path).suffix.lower() in _AUDIO_EXTENSIONS
 
 
+_DIGIT_RUN = re.compile(r"(\d+)")
+
+
+def _natural_key(path: str) -> tuple:
+    """Sort key that reads runs of digits as numbers.
+
+    Neither the file cache nor the directory walk carries a part index, so the
+    order has to come out of the path — and plain lexical order puts "Part 10"
+    before "Part 2". Chaptarr imports the list in the order it is given, so a
+    multi-part or chapter-split book lands out of sequence.
+
+    The leading flag makes every key element the same shape, so a numeric run is
+    never compared against a text one.
+    """
+    return tuple(
+        (1, int(token), "") if token.isdigit() else (0, 0, token.lower())
+        for token in _DIGIT_RUN.split(path)
+    )
+
+
 def get_audio_file_paths(book_id: str) -> list[str]:
     """Absolute paths of the audio files Libation has written for a book.
 
@@ -584,8 +652,9 @@ def get_audio_file_paths(book_id: str) -> list[str]:
     if not paths:
         paths = _scan_books_dir_for(book_id)
 
-    # Stable order so repeated imports send the same file list.
-    return sorted(dict.fromkeys(paths))
+    # Stable order so repeated imports send the same file list, and part order
+    # so a book that arrived in pieces is not reassembled out of sequence.
+    return sorted(dict.fromkeys(paths), key=_natural_key)
 
 
 def _scan_books_dir_for(book_id: str) -> list[str]:
