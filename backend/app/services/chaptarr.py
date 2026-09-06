@@ -220,17 +220,32 @@ async def test_connection(cfg: ChaptarrConfig) -> dict:
 
 # ── Path mapping ──────────────────────────────────────────────────────────────
 
-def map_path(cfg: ChaptarrConfig, path: str) -> str:
-    """Rewrite a Libation-side path into the path Chaptarr sees for the same file."""
-    if not cfg.path_from or not cfg.path_to:
-        return path
-    src = cfg.path_from.rstrip("/")
-    dst = cfg.path_to.rstrip("/")
+def _rewrite(path: str, src: str, dst: str) -> str:
+    src, dst = src.rstrip("/"), dst.rstrip("/")
     if path == src:
         return dst
     if path.startswith(src + "/"):
         return dst + path[len(src):]
     return path
+
+
+def map_path(cfg: ChaptarrConfig, path: str) -> str:
+    """Rewrite a Libation-side path into the path Chaptarr sees for the same file."""
+    if not cfg.path_from or not cfg.path_to:
+        return path
+    return _rewrite(path, cfg.path_from, cfg.path_to)
+
+
+def unmap_path(cfg: ChaptarrConfig, path: str) -> str:
+    """Rewrite a Chaptarr-side path back into the path we see for the same file.
+
+    The inverse of `map_path`. Reconciliation needs it because Chaptarr reports
+    its root folders in its own view of the filesystem, and in `move` import mode
+    that is where our downloaded books have gone.
+    """
+    if not cfg.path_from or not cfg.path_to:
+        return path
+    return _rewrite(path, cfg.path_to, cfg.path_from)
 
 
 # ── Metadata lookup ───────────────────────────────────────────────────────────
