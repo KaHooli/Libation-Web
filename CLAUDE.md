@@ -265,6 +265,13 @@ The traffic runs both ways: with `chaptarr_skip_existing` on, a book Chaptarr al
 - Cannot delete own account, cannot revoke own admin status
 - `is_admin` column added via startup migration (`_migrate_db`) using `ALTER TABLE` + `PRAGMA table_info`
 
+## Settings page layout (`frontend/src/pages/SettingsPage.tsx`)
+`SettingsPage` is a thin tabbed shell; every section lives in its own file under `frontend/src/components/settings/`. Tabs, in order: **Account** (update-credentials when on defaults, 2FA, username, password, sessions), **Library** (Libation download toggles), **Integrations** (Chaptarr), **Users** (management + permissions), **System** (about, logs, API docs).
+
+- `adminOnly` tabs are hidden outright for non-admins rather than rendered empty. Sections *within* a visible tab are still individually gated — `System` shows About to everyone but Logs and API docs only to admins
+- The active tab is held in `?tab=` so a section can be linked to and survives a reload. An unknown or now-forbidden id falls back to the first tab the user can see; the fallback never rewrites the URL, so an admin deep-link still resolves once `user` finishes loading
+- The default-credentials banner renders above the tab content on **every** tab — it is the one warning that must not be possible to tab away from — and links to the Account tab
+
 ## Settings & Stats (`backend/app/api/settings.py`)
 - `GET/PUT /api/settings/libation` — reads/writes `/config/appsettings.json` (resilient: merges only known keys)
 - `GET /api/settings/stats` — total_books (LibationContext.db), total_downloads (our DB), accounts_count (bridge `/accounts`), downloads_per_user (JOIN)
