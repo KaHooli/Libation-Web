@@ -22,7 +22,31 @@ services:
       - REFRESH_TOKEN_EXPIRE_DAYS=60
       - PUID=1000
       - PGID=1000
+      # Storage defaults to SQLite on the /data volume. To use PostgreSQL
+      # instead, uncomment the `postgres` service below and this line:
+      # - DATABASE_URL=postgresql://libation:libation@postgres:5432/libation
     restart: unless-stopped
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
+
+  # Optional PostgreSQL backend. SQLite is the default and needs none of this.
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: libation-db
+  #   environment:
+  #     - POSTGRES_USER=libation
+  #     - POSTGRES_PASSWORD=libation
+  #     - POSTGRES_DB=libation
+  #   volumes:
+  #     - libation-pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U libation"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
 
 volumes:
   libation-search:
+  # libation-pgdata:

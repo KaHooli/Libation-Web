@@ -1,4 +1,7 @@
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -11,6 +14,8 @@ from ..schemas.auth import (
 )
 from ..schemas.users import SessionResponse
 from ..services import auth as auth_svc
+from ..services import oidc as oidc_svc
+from ..services.logger import get_logger
 from ..config import settings
 from ..limiter import limiter
 
@@ -35,6 +40,22 @@ def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_NAME, path="/api/auth")
 
 
+def _require_password_login() -> None:
+    """Refuse username/password sign-in when the deployment has turned it off.
+
+    Set ALLOW_PASSWORD_LOGIN=true to bring it back — the way out if the identity
+    provider is misconfigured and nobody can get in.
+    """
+    if not settings.password_login_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Password sign-in is disabled; use single sign-on. An administrator "
+                "can re-enable it by setting ALLOW_PASSWORD_LOGIN=true."
+            ),
+        )
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer),
     db: Session = Depends(get_db),
@@ -53,6 +74,7 @@ def get_current_user(
 @router.post("/login", response_model=TokenResponse | TwoFactorRequiredResponse)
 @limiter.limit("20/minute")
 def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    _require_password_login()
     user = auth_svc.authenticate_user(db, body.username, body.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -76,6 +98,9 @@ def login(body: LoginRequest, request: Request, response: Response, db: Session 
 @router.post("/verify-2fa", response_model=TokenResponse)
 @limiter.limit("10/minute")
 def verify_2fa(body: TwoFactorRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    # The 2FA step only ever follows a password login, so it is gated too —
+    # otherwise a temp token minted before the switch would still complete.
+    _require_password_login()
     user_id = auth_svc.decode_token(body.temp_token, "2fa_pending")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired 2FA session")
@@ -97,6 +122,121 @@ def verify_2fa(body: TwoFactorRequest, request: Request, response: Response, db:
         access_token=auth_svc.create_access_token(user.id),
         user=UserResponse.model_validate(user),
     )
+
+
+# ── Single sign-on ────────────────────────────────────────────────────────────
+
+@router.get("/config")
+def auth_config():
+    """What sign-in methods this deployment offers.
+
+    Public and unauthenticated by necessity — the login page reads it before
+    anyone has credentials. It exposes only which methods exist, never the
+    issuer, client id or secret.
+    """
+    return {
+        "password_login_enabled": settings.password_login_enabled,
+        "oidc_enabled": settings.oidc_configured,
+        "oidc_provider_name": settings.OIDC_PROVIDER_NAME,
+    }
+
+
+def _oidc_redirect_uri(request: Request) -> str:
+    """The callback URL registered with the provider.
+
+    Derived from the request when OIDC_REDIRECT_URL is blank, which is correct
+    for a directly exposed container. Behind a reverse proxy that terminates
+    TLS or rewrites the host, set it explicitly — uvicorn is not started with
+    --proxy-headers, so the derived URL would use the internal scheme and host.
+    """
+    configured = settings.OIDC_REDIRECT_URL.strip()
+    if configured:
+        return configured
+    return str(request.url_for("oidc_callback"))
+
+
+def _login_page_redirect(error: str | None = None, next_path: str | None = None):
+    target = next_path or "/"
+    if error:
+        target = f"/login?{urlencode({'sso_error': error})}"
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/oidc/login")
+def oidc_login(request: Request, next: str | None = None, db: Session = Depends(get_db)):
+    if not settings.oidc_configured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Single sign-on is not configured",
+        )
+    try:
+        url = oidc_svc.begin_login(db, _oidc_redirect_uri(request), next)
+    except oidc_svc.OidcError as exc:
+        get_logger().error("[oidc] Could not start sign-in: %s", exc)
+        return _login_page_redirect(error=str(exc))
+    return RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/oidc/callback")
+def oidc_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Where the provider sends the browser back.
+
+    On success this sets the refresh cookie and redirects into the app; the SPA
+    already calls /api/auth/refresh on load, so the access token never has to
+    travel in a URL where it would land in history and proxy logs.
+    """
+    if not settings.oidc_configured:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Single sign-on is not configured",
+        )
+
+    if error:
+        get_logger().warning("[oidc] Provider returned an error: %s", error)
+        return _login_page_redirect(error=error_description or error)
+    if not code or not state:
+        return _login_page_redirect(error="The provider's response was incomplete.")
+
+    try:
+        user, next_path = oidc_svc.complete_login(db, code, state)
+    except oidc_svc.OidcError as exc:
+        get_logger().warning("[oidc] Sign-in failed: %s", exc)
+        return _login_page_redirect(error=str(exc))
+
+    raw_refresh = auth_svc.create_session(
+        db, user.id,
+        user_agent=request.headers.get("user-agent"),
+        ip=request.client.host if request.client else None,
+    )
+    get_logger().info("[oidc] Signed in %r via SSO", user.username)
+
+    redirect = _login_page_redirect(next_path=next_path)
+    _set_refresh_cookie(redirect, raw_refresh)
+    return redirect
+
+
+@router.post("/oidc/test")
+def oidc_test(current_user=Depends(get_current_user)):
+    """Reach the provider and report what discovery returned. Admin only."""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    if not settings.oidc_configured:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Single sign-on is not configured",
+        )
+    oidc_svc.clear_cache()
+    try:
+        return oidc_svc.provider_check()
+    except oidc_svc.OidcError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
 
 @router.post("/refresh", response_model=TokenResponse)

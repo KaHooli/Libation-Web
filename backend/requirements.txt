@@ -1,6 +1,16 @@
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 sqlalchemy==2.0.36
+alembic==1.19.1
+# Optional PostgreSQL backend. Bundled rather than made an extra so a user can
+# switch DATABASE_URL without rebuilding the image; SQLite remains the default.
+psycopg[binary]==3.3.5
+# Already pulled in transitively by python-jose[cryptography]; pinned as a floor
+# because Potation uses Fernet directly to encrypt stored Audible credentials.
+cryptography>=42.0
+# Native Audible client: device-registration OAuth, the library API, and
+# content licenses. Requires httpx >=0.27.2,<0.29, satisfied by the pin below.
+audible==0.12.0
 passlib[bcrypt]==1.7.4
 bcrypt==3.2.2
 python-jose[cryptography]==3.3.0

@@ -26,6 +26,12 @@ class User(Base):
     download_cap = Column(Integer, nullable=True)
     audible_account_id = Column(String, nullable=True)
     owner_name = Column(String, nullable=True)
+    #: OIDC identity. `sub` is the only claim a provider guarantees is stable —
+    #: usernames and email addresses can be reassigned — so it is what links a
+    #: local user to their SSO account. Scoped by issuer so switching providers
+    #: cannot silently hand someone else's account over.
+    oidc_subject = Column(String, nullable=True, index=True)
+    oidc_issuer = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
@@ -45,3 +51,29 @@ class Session(Base):
     ip_address = Column(String, nullable=True)
 
     user = relationship("User", back_populates="sessions")
+
+
+class OidcLoginState(Base):
+    """One in-flight OIDC authorization request.
+
+    The `state`, `nonce` and PKCE verifier have to survive the round trip to the
+    provider, and the callback may land on a different worker than the one that
+    started the flow — so they live in the database rather than in memory.
+
+    Rows are single-use: `consumed_at` is stamped on the first successful
+    callback, which is what stops a replayed authorization code.
+    """
+
+    __tablename__ = "oidc_login_states"
+
+    id = Column(Integer, primary_key=True)
+    state = Column(String, unique=True, nullable=False, index=True)
+    nonce = Column(String, nullable=False)
+    code_verifier = Column(String, nullable=False)
+    redirect_uri = Column(String, nullable=False)
+    #: Where to send the browser once the login completes.
+    next_path = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)

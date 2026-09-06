@@ -36,12 +36,47 @@ A Dockerized web application that wraps the LibationCli audiobook manager with a
 - **Session persistence**: On page load, silently calls `/api/auth/refresh` using the cookie
 - **Auto-refresh**: Timer in `AuthContext` refreshes access token 2 min before expiry
 
+## OIDC single sign-on (`backend/app/services/oidc.py`, `backend/app/api/auth.py`)
+- Authorization-code flow with PKCE. `begin_login()` stores `state`, `nonce` and the PKCE verifier in `oidc_login_states` (a table, not memory — the callback may land on a different worker), and `complete_login()` marks the row consumed **before** exchanging the code, so a replay loses the race
+- ID tokens are verified against the provider's JWKS. `ALLOWED_ALGORITHMS` is asymmetric-only: accepting an HS\* algorithm while verifying against a JWKS would let a token forged with the public key as its HMAC secret validate
+- Discovery and JWKS documents are cached 5 minutes (`clear_cache()` on settings change / `POST /api/auth/oidc/test`)
+- **`settings.oidc_configured`** requires `OIDC_ENABLED` *and* issuer *and* client id *and* secret. **`settings.password_login_enabled`** is `ALLOW_PASSWORD_LOGIN` when set, else `not oidc_configured`. The two-part rule means a half-filled config can never disable password login and lock everyone out; `ALLOW_PASSWORD_LOGIN=true` is the documented escape hatch
+- `POST /api/auth/login` and `/verify-2fa` return 403 (naming the env var) when password login is off
+- Users are keyed on `users.oidc_subject`, scoped by `users.oidc_issuer`. First sign-in links an existing local account by email then username; an account already linked to a *different* subject is never taken over. `OIDC_AUTO_CREATE_USERS=false` restricts SSO to pre-existing accounts. SSO-created users get an unusable random password hash
+- `OIDC_ADMIN_GROUP` both grants and revokes admin on each login; blank leaves admin managed in-app
+- The callback sets the refresh cookie and 303s into the app — the access token never travels in a URL, because `AuthContext` already calls `/api/auth/refresh` on mount. `next` is restricted to same-origin paths (`safe_next_path`) so the callback is not an open redirect
+- `GET /api/auth/config` is public (the login page needs it before anyone has credentials) and exposes only `{password_login_enabled, oidc_enabled, oidc_provider_name}` — never the issuer, client id or secret
+- `UserResponse.is_sso_user` is a computed field; `oidc_subject` is read from the ORM object but `exclude=True` so it never serialises
+- **Behind a reverse proxy set `OIDC_REDIRECT_URL`** — uvicorn is not started with `--proxy-headers`, so the derived callback URL would use the internal scheme and host
+- Tests: `scripts/test-oidc.py` runs against an in-process stub provider with a real RSA JWKS. CI job `oidc` gates `merge`
+
 ### Auth API endpoints (`backend/app/api/auth.py`)
 - `GET /api/auth/default-credentials` — returns `{"using_default_credentials": bool}`; compares logged-in user's username against `ADMIN_USERNAME` env var and verifies stored hash still matches `ADMIN_PASSWORD`. Used by Settings page to show the amber warning banner.
 - `PATCH /api/auth/me` — free-form dict body; updates `audible_account_id` and/or `owner_name` on the logged-in user
 - `POST /api/auth/change-username` — body: `{new_username, current_password}`; validates ≥3 chars, 409 on conflict; returns updated `UserResponse`
 - `POST /api/auth/change-password` — body: `{current_password, new_password}`; revokes all sessions on success
 - `GET /api/auth/sessions` / `DELETE /api/auth/sessions/{id}` / `DELETE /api/auth/sessions` — session management for the logged-in user
+
+## Database backends & migrations
+- **SQLite by default** (`sqlite:////data/app.db`); **PostgreSQL optional** via `DATABASE_URL`. `database.py::normalized_url()` rewrites `postgres://`, `postgresql://` and `postgresql+psycopg2://` to `postgresql+psycopg` (psycopg 3 is bundled); `engine_kwargs()` branches per dialect because `check_same_thread` is a sqlite3 argument that raises on psycopg
+- **Alembic** replaced `Base.metadata.create_all` + the hand-rolled `_migrate_db`. `app/migrations.py::run_migrations()` handles three states: fresh database (run every revision), pre-Alembic database (run `legacy_migrations.migrate_pre_alembic`, stamp `0001`, then upgrade — tables are *adopted*, never rebuilt), and already-migrated (upgrade to head)
+- Revisions live in `backend/alembic/versions/`: `0001_baseline` reproduces the pre-Potation schema exactly; `0002_potation_schema` adds the engine's own tables; `0003_oidc` adds SSO identity on `users` plus `oidc_login_states`; `0004_audible_login_state` adds `audible_login_states`. `env.py` sets `render_as_batch` for SQLite only — SQLite cannot `ALTER` much, and on PostgreSQL batch mode would rebuild tables for nothing
+- `alembic.ini` and `alembic/` are copied to `/app/` in the Dockerfile, beside `app/`, because `migrations.py` resolves them relative to the package parent
+- `seed_system_settings()` uses `ON CONFLICT ... DO NOTHING` rather than SQLite's `INSERT OR IGNORE`, so it runs on both backends
+- Timestamps on Potation tables are `DateTime(timezone=True)`; the older tables store tz-aware values in naive columns (which Postgres silently strips), so `api/downloads.py` re-attaches `timezone.utc` on read. Mixed convention until Phase D drops the old tables
+
+## Potation — native Audible engine (in progress)
+Replaces LibationCli, the `libation-bridge` C# sidecar, and the direct reads of Libation's SQLite. Foundations, native auth, library sync and the DRM census are in. **Nothing is wired into the API yet** — LibationCli is still the engine, and `services/cli.py` / `services/libation.py` remain the live path. Reconciliation, the download/decrypt pipeline and the API cut-over are next.
+- `services/potation/creds.py` — Fernet encryption for stored Audible credentials. The key is `{LIBATION_CONFIG}/potation.key`, generated 0600 on first use, **not** derived from `SECRET_KEY` so rotating the JWT secret doesn't log out every Audible account. `try_decrypt_json()` returns `None` on a lost key so the account is flagged `needs_reauth` rather than taking startup down
+- `models/potation.py` — `audible_accounts`, `books` (incl. multi-part parent/child), `book_files` (replaces `FileLocationsV2.json`, carries `part_index` so parts don't sort lexically), `audible_licenses` (voucher reuse + `drm_type`), `download_jobs` (state machine, classified `error_code`, `cancel_requested`), `download_quota` (daily-cap ledger), `reconciliation_runs`
+- `books.liberated_override` is tri-state: NULL derives from `book_files`, 1/0 is an explicit user override
+- `services/potation/marketplaces.py` — the frontend still posts LibationCli's marketplace *names* (`"germany"`, not `"de"`); this maps them to `audible` country codes. A wrong marketplace fails late, at device registration, behind a sign-in URL that looked fine
+- `services/potation/auth.py` — two-step device registration. `begin_login()` builds the Amazon OAuth URL and stores the PKCE verifier (encrypted) + device serial on an `audible_login_states` row; `complete_login()` consumes the row **before** exchanging the code, so a double submit cannot register two devices (Amazon caps registrations). Replaces the `libationcli login-external` subprocess that was held alive in a module-level dict. `disconnect_account()` calls `deregister_device()` — the old `DELETE /api/accounts/{id}` never did, leaving a registered device behind on every removal
+- `services/potation/client.py` — `Authenticator.to_dict()/from_dict()` is the serialisation boundary; the blob is Fernet-encrypted onto `audible_accounts.auth_blob`. `client_for()` re-saves after the block because the authenticator silently refreshes expired access tokens. A blob that will not decrypt sets `needs_reauth` and drops the account from `active_accounts()` rather than raising past the caller
+- `services/potation/library.py` — library sync. A `MultiPartBook` parent has no downloadable content; parts become child rows ordered by Audible's `sort` key, which is what stops "Part 10" preceding "Part 2"
+- `services/potation/license.py` — `POST content/{asin}/licenserequest`. `content_license.drm_type` is the number the whole plan turns on: `Adrm` (AAX/AAXC) and `Mpeg` are natively downloadable; `Widevine`/`PlayReady`/`FairPlay` need a CDM we do not have. Licenses are persisted so a retry does not buy another one — a Download license counts against Audible's daily allowance
+- `scripts/potation-census.py` — `login` / `sync` / `census` subcommands to measure DRM exposure against a real account. Samples 25 titles by default; `--sample 0` sweeps everything and prompts first. Keeps its database and `potation.key` under a gitignored `.potation-census/` because both hold live Audible credentials
+- Tests: `scripts/test-potation.py`, run as `PYTHONPATH=backend python scripts/test-potation.py`. Runs the database section on SQLite always, and on PostgreSQL when `POTATION_TEST_POSTGRES_URL` is set. CI job `potation` runs both and gates `merge`
 
 ## Database (SQLite at `/data/app.db`)
 - `users`: id, username, hashed_password (bcrypt), totp_secret, totp_enabled, is_active, is_admin, permissions (JSON), download_cap (INTEGER), audible_account_id (TEXT), owner_name (TEXT), created_at
@@ -292,6 +327,7 @@ credentials remain, no real Audible accounts, no real library data, no downloads
 | `./config/LibationContext.db` | Real library data tied to a real Audible account |
 | `./config/FileLocationsV2.json` | Libation's ASIN → file-path cache for a real library |
 | `./config/SearchEngine/` | Lucene index built from real library |
+| `./config/potation.key` | Fernet key that decrypts stored Audible credentials in `audible_accounts.auth_blob` |
 | `./config/logs/` | Log files that may contain real email addresses |
 | `./data/app.db` | Real user accounts and sessions, plus the Chaptarr URL and API key in `system_settings`; container recreates it with default `admin/admin` on next start |
 | `./audiobooks/` (contents) | Downloaded audiobook files — purge all content, keep the directory |

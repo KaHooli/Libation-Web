@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>LibationWeb</Name>
-  <Repository>jtechguru1993/libation-web:latest</Repository>
-  <Registry>https://hub.docker.com/r/jtechguru1993/libation-web</Registry>
+  <Repository>ghcr.io/kahooli/libation-web:latest</Repository>
+  <Registry>https://github.com/KaHooli/Libation-Web/pkgs/container/libation-web</Registry>
   <Network>bridge</Network>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/jtechguru1/Libation/issues</Support>
-  <Project>https://github.com/jtechguru1/Libation/tree/web-ui-via-docker</Project>
+  <Support>https://github.com/KaHooli/Libation-Web/issues</Support>
+  <Project>https://github.com/KaHooli/Libation-Web</Project>
   <Overview>
     A web UI wrapper for Libation — the Audible audiobook manager. Connects to your Audible account,
     scans your library, and downloads audiobooks via LibationCli. Single Docker container with a
@@ -19,8 +19,8 @@
   </Overview>
   <Category>Downloaders: MediaApp:Music</Category>
   <WebUI>http://[IP]:[PORT:8000]</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/jtechguru1/Libation/web-ui-via-docker/unraid-template.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/jtechguru1/Libation/web-ui-via-docker/unraid-icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/KaHooli/Libation-Web/main/unraid-template.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/KaHooli/Libation-Web/main/unraid-icon.png</Icon>
   <ExtraParams></ExtraParams>
   <PostArgs></PostArgs>
   <CPUset></CPUset>
@@ -77,6 +77,48 @@
       <Value>change-me-use-a-long-random-string</Value>
       <Name>SECRET_KEY</Name>
       <Description>Used to sign authentication tokens. Use a random string of at least 32 characters — longer is better. Avoid $ and " characters.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>false</Value>
+      <Name>OIDC_ENABLED</Name>
+      <Description>Optional. Set to true to sign in with an OpenID Connect provider (Authelia, Authentik, Keycloak, Pocket ID, and so on). You must also fill in OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET — until all four are set, password sign-in stays enabled. Once SSO is fully configured, password sign-in switches off; set ALLOW_PASSWORD_LOGIN to true to keep both.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>OIDC_ISSUER</Name>
+      <Description>Optional. Your provider's base URL, e.g. https://auth.example.com — the rest is discovered automatically.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>OIDC_CLIENT_ID</Name>
+      <Description>Optional. The client id you registered with your provider.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>OIDC_CLIENT_SECRET</Name>
+      <Description>Optional. The client secret you registered with your provider.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>OIDC_REDIRECT_URL</Name>
+      <Description>Optional but required if you reach Libation through a reverse proxy. The exact callback URL registered with your provider, e.g. https://libation.example.com/api/auth/oidc/callback</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>ALLOW_PASSWORD_LOGIN</Name>
+      <Description>Optional. Leave blank to let it follow SSO (on until single sign-on is configured, off afterwards). Set to true to keep username/password sign-in available alongside SSO — also how you get back in if your provider is misconfigured.</Description>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value/>
+      <Name>DATABASE_URL</Name>
+      <Description>Optional. Leave blank to use SQLite on the /data volume (recommended). To use an existing PostgreSQL server instead, enter a connection string such as postgresql://user:password@host:5432/libation — the schema is created automatically. Switching this points the app at a different, empty database; it does not move your existing data.</Description>
       <Mode/>
     </Variable>
     <Variable>
