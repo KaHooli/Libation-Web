@@ -40,6 +40,9 @@ class UserResponse(BaseModel):
     owner_name: str | None = None
     download_cap: int | None = None
     permissions: dict | None = None
+    #: True while the account is still on a password the server generated for
+    #: it. The UI holds the user at a change-password prompt until it clears.
+    must_change_password: bool = False
     #: Read from the ORM object but never serialised — only the boolean below
     #: goes over the wire.
     oidc_subject: str | None = Field(default=None, exclude=True)

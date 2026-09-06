@@ -32,6 +32,11 @@ class User(Base):
     #: cannot silently hand someone else's account over.
     oidc_subject = Column(String, nullable=True, index=True)
     oidc_issuer = Column(String, nullable=True)
+    #: Set on the seeded admin when its password was generated rather than
+    #: supplied. Cleared by a successful password change, which is the only
+    #: thing the UI lets the account do until then.
+    must_change_password = Column(Boolean, default=False, nullable=False,
+                                  server_default="0")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")

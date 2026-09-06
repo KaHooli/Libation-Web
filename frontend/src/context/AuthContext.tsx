@@ -12,6 +12,9 @@ interface User {
   /** Signs in through the identity provider, so password and 2FA controls
    *  do not apply to this account. */
   is_sso_user?: boolean;
+  /** Still on a password the server generated. The app holds this account at
+   *  a change-password prompt until it is replaced. */
+  must_change_password?: boolean;
 }
 
 interface AuthContextValue {

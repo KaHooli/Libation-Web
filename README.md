@@ -266,7 +266,7 @@ Liberate page; it reports the answer and badges the affected books whether or no
 |-------------------------------|--------------|----------------------------------------------------|
 | `SECRET_KEY`                  | (required)   | JWT signing key — **generate a strong random value** |
 | `ADMIN_USERNAME`              | `admin`      | Initial admin username — only used on **first run** (before `app.db` exists); ignored after that |
-| `ADMIN_PASSWORD`              | `admin`      | Initial admin password — only used on **first run**; to change after first run use Settings → Change Password |
+| `ADMIN_PASSWORD`              | *(generated)* | Initial admin password. **Leave it unset** and a random one is generated on first run and printed to the container log (`docker compose logs libation`); you are asked to change it the first time you sign in. Until you do, a fresh one is generated on every restart, so losing it just means restarting and looking again. Set it to pin the password yourself and skip the prompt |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `15`         | Access token lifetime                              |
 | `REFRESH_TOKEN_EXPIRE_DAYS`   | `60`         | Refresh token / session lifetime                   |
 | `PUID`                        | `1000`       | User ID for file ownership (Unraid: 99)            |
@@ -356,7 +356,7 @@ Add each via **Add another Path, Port, Variable, Label or Device** → **Variabl
 | `PGID` | `100` | Unraid's standard `users` group — leave as `100` |
 | `SECRET_KEY` | *(make one up — see below)* | **Required** |
 | `ADMIN_USERNAME` | `admin` | Your admin login username |
-| `ADMIN_PASSWORD` | *(strong password)* | **Do not leave as default** |
+| `ADMIN_PASSWORD` | *(leave blank)* | Leave empty and one is generated for you — see Step 5 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Leave as default |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `60` | Leave as default |
 
@@ -377,7 +377,19 @@ Click **Apply**. Unraid will pull the image and start the container. Once it sho
 http://[your-unraid-ip]:8000
 ```
 
-Log in with your `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+**If you left `ADMIN_PASSWORD` blank**, the password was generated for you and written to the container log. In Unraid, click the container's icon and choose **Logs**, then look for:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Libation Web UI — first-run administrator account
+│
+│   Username:  admin
+│   Password:  xxxxx-xxxxx-xxxxx-xxxxx
+```
+
+Sign in with that, and you'll be asked to choose your own password straight away. Lost it before signing in? Restart the container — a new one is generated and printed each time until you've changed it.
+
+**If you set `ADMIN_PASSWORD` yourself**, just log in with that and your `ADMIN_USERNAME`.
 
 ---
 

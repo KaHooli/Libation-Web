@@ -276,8 +276,13 @@ def me(current_user=Depends(get_current_user)):
 
 @router.get("/default-credentials")
 def default_credentials(current_user=Depends(get_current_user)):
+    # With no ADMIN_PASSWORD supplied there is no factory default to still be
+    # on — the seed password was generated, and `must_change_password` is what
+    # tracks that instead. Checking anyway would hash an empty string on every
+    # call and report nonsense.
     is_default = (
-        current_user.username == settings.ADMIN_USERNAME
+        settings.admin_password_supplied
+        and current_user.username == settings.ADMIN_USERNAME
         and auth_svc.verify_password(settings.ADMIN_PASSWORD, current_user.hashed_password)
     )
     return {"using_default_credentials": is_default}
@@ -361,7 +366,14 @@ def change_password(
 ):
     if not auth_svc.verify_password(body.current_password, current_user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
+    if auth_svc.verify_password(body.new_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="New password must be different from the current one",
+        )
     current_user.hashed_password = auth_svc.hash_password(body.new_password)
+    # Whatever held this account at the change prompt is satisfied now.
+    current_user.must_change_password = False
     db.commit()
     auth_svc.revoke_all_sessions(db, current_user.id)
     return MessageResponse(message="Password changed. Please log in again.")
