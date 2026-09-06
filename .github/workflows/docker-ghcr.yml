@@ -153,6 +153,28 @@ jobs:
       - name: Run Chaptarr integration test
         run: PYTHONPATH=backend python scripts/test-chaptarr.py
 
+  # Liberate filtering and downloaded-file ordering, against a synthetic
+  # LibationContext.db. The grid and "Select All" derive their answers from the
+  # same SQL, and this is what keeps them from drifting apart again.
+  liberate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run Liberate test
+        run: PYTHONPATH=backend python scripts/test-liberate.py
+
   # Migrations, dual-backend support and credential encryption. Runs the whole
   # database section twice — once on SQLite, once against the PostgreSQL service
   # below — because dialect bugs only show up when something exercises Postgres.
@@ -216,7 +238,7 @@ jobs:
   # the human-readable tags. Only this job creates tags; the build job pushes
   # untagged digests.
   merge:
-    needs: [prepare, build, smoke, chaptarr, potation, oidc]
+    needs: [prepare, build, smoke, chaptarr, liberate, potation, oidc]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
