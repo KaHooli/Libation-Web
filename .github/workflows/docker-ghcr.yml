@@ -312,6 +312,28 @@ jobs:
       - name: Run quota test
         run: PYTHONPATH=backend python scripts/test-quota.py
 
+  # The persistent download queue, with the pipeline injected so the queue's own
+  # decisions are exercised without an Audible account: claiming, retry
+  # classification, cancellation across sessions, resume after a crash.
+  queue:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run queue test
+        run: PYTHONPATH=backend python scripts/test-queue.py
+
   # Settings backup and restore. The sharp edges are the secrets: the OIDC
   # client secret has to be decrypted out and re-encrypted in (the key does not
   # travel), a sanitised backup must not wipe the secrets it declined to carry,
@@ -398,7 +420,7 @@ jobs:
   # the human-readable tags. Only this job creates tags; the build job pushes
   # untagged digests.
   merge:
-    needs: [prepare, build, smoke, chaptarr, liberate, reconcile, firstrun, backup, drm, download, decrypt, quota, potation, oidc]
+    needs: [prepare, build, smoke, chaptarr, liberate, reconcile, firstrun, backup, drm, download, decrypt, quota, queue, potation, oidc]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
