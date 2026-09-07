@@ -22,8 +22,8 @@ rather than asking again.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from ...models.potation import AudibleAccount, AudibleLicense, Book
 from ..logger import get_logger
+from . import creds
 
 #: What a Python pipeline can actually handle end to end.
 #: Adrm covers both AAX (4-byte activation-bytes key) and AAXC (16+16 key/iv);
@@ -69,9 +70,13 @@ class LicenseInfo:
     download_url: Optional[str] = None
     url_expires_at: Optional[datetime] = None
     refresh_date: Optional[datetime] = None
-    #: The encrypted voucher. Decrypting it is the download pipeline's job.
+    #: Whether the response carried an encrypted voucher at all.
     has_voucher: bool = False
     raw_status: Optional[str] = None
+    #: Recovered from the voucher, only when `decrypt_voucher=True` was asked
+    #: for. **Secrets** — never log them, never put them in an error message.
+    key: Optional[str] = None
+    iv: Optional[str] = None
 
     @property
     def natively_downloadable(self) -> bool:
@@ -130,8 +135,15 @@ def request_license(
     consumption_type: str = "Download",
     quality: str = "High",
     persist: bool = True,
+    decrypt_voucher: bool = False,
 ) -> LicenseInfo:
-    """Ask Audible for a license, and record what it said."""
+    """Ask Audible for a license, and record what it said.
+
+    `decrypt_voucher` is off by default so the census stays a measurement: it
+    only needs to know *which* scheme Audible chose, and decrypting adds failure
+    surface to a path whose whole value is that it does not overclaim. The
+    download pipeline turns it on, because the key and iv are what it is for.
+    """
     from .client import client_for
 
     body = {
@@ -151,10 +163,37 @@ def request_license(
         except Exception as exc:
             raise LicenseError(f"{asin}: {exc}") from exc
 
-    info = parse_license(asin, payload)
+        info = parse_license(asin, payload)
+        if decrypt_voucher and info.has_voucher:
+            # Inside the client block: the voucher is keyed to this device
+            # registration, so it needs the same authenticator that made the
+            # request. A re-registration makes an old voucher undecryptable,
+            # which is why the recovered key is persisted rather than re-derived.
+            key, iv = _decrypt_voucher(client.auth, payload, asin)
+            info = replace(info, key=key, iv=iv)
+
     if persist:
         _persist(db, info)
     return info
+
+
+def _decrypt_voucher(authenticator, payload: dict, asin: str) -> tuple[Optional[str], Optional[str]]:
+    """Recover the AAXC key and iv, or report failure without quoting them."""
+    from audible.aescipher import decrypt_voucher_from_licenserequest
+
+    try:
+        voucher = decrypt_voucher_from_licenserequest(authenticator, payload)
+    except Exception as exc:
+        # Deliberately does not include the exception's own payload: a failure
+        # part-way through can carry plaintext fragments of the voucher.
+        raise LicenseError(
+            f"{asin}: the licence voucher could not be decrypted "
+            f"({type(exc).__name__})."
+        ) from None
+
+    if not isinstance(voucher, dict):
+        raise LicenseError(f"{asin}: the licence voucher was not in the expected shape.")
+    return voucher.get("key"), voucher.get("iv")
 
 
 def _persist(db: Session, info: LicenseInfo) -> None:
@@ -175,8 +214,92 @@ def _persist(db: Session, info: LicenseInfo) -> None:
     row.refresh_date = info.refresh_date
     row.acr = info.acr
     row.version = info.version
+    # Encrypted at rest under the same key as Audible credentials. Only written
+    # when this request actually recovered them — a later census probe of the
+    # same title must not blank out key material a download already stored.
+    if info.key:
+        row.key_ciphertext = creds.encrypt(info.key)
+    if info.iv:
+        row.iv_ciphertext = creds.encrypt(info.iv)
     row.fetched_at = datetime.now(timezone.utc)
     db.commit()
+
+
+# ── Reuse ─────────────────────────────────────────────────────────────────────
+
+#: Don't hand a CDN link to a downloader that is about to spend minutes on it
+#: when the link expires in seconds. Re-licensing is cheaper than a failed
+#: download that has to be retried anyway.
+URL_EXPIRY_MARGIN = timedelta(minutes=5)
+
+
+def stored_license(db: Session, asin: str, *, now: Optional[datetime] = None) -> Optional[LicenseInfo]:
+    """The persisted licence for a title, if it is still usable.
+
+    A `Download` licence counts against Audible's daily allowance, so a retry
+    that re-licenses spends quota to learn something already known. Reuse is the
+    difference between a retry being free and a retry being rationed.
+
+    Returns None when there is no row, when the CDN link has expired (or is
+    about to), or when the key material cannot be decrypted — a lost
+    `potation.key` reads as "no licence", which costs one request rather than
+    producing a file that will not play.
+    """
+    row = (
+        db.query(AudibleLicense)
+        .filter(AudibleLicense.book_asin == asin)
+        .order_by(AudibleLicense.id.desc())
+        .first()
+    )
+    if row is None or not row.download_url:
+        return None
+
+    moment = now or datetime.now(timezone.utc)
+    expires = row.url_expires_at
+    if expires is not None:
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires - URL_EXPIRY_MARGIN <= moment:
+            return None
+
+    key = creds.try_decrypt(row.key_ciphertext) if row.key_ciphertext else None
+    iv = creds.try_decrypt(row.iv_ciphertext) if row.iv_ciphertext else None
+    if (row.key_ciphertext and key is None) or (row.iv_ciphertext and iv is None):
+        return None
+
+    return LicenseInfo(
+        asin=asin,
+        drm_type=row.drm_type,
+        acr=row.acr,
+        version=row.version,
+        download_url=row.download_url,
+        url_expires_at=row.url_expires_at,
+        refresh_date=row.refresh_date,
+        has_voucher=bool(row.key_ciphertext),
+        key=key,
+        iv=iv,
+    )
+
+
+def license_for_download(
+    db: Session,
+    account: AudibleAccount,
+    asin: str,
+    *,
+    force_refresh: bool = False,
+) -> LicenseInfo:
+    """The licence a download should use: the stored one when it still serves."""
+    if not force_refresh:
+        existing = stored_license(db, asin)
+        if existing is not None:
+            return existing
+    return request_license(
+        db, account, asin,
+        drm_types=NATIVE_DRM_TYPES,
+        consumption_type="Download",
+        persist=True,
+        decrypt_voucher=True,
+    )
 
 
 # ── The census ────────────────────────────────────────────────────────────────
