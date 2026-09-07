@@ -30,7 +30,7 @@ from .api import chaptarr as chaptarr_router
 from .services.auth import hash_password, get_user_by_username
 from .services.logger import get_logger
 from .models.user import User
-from .config import settings
+from .config import APP_VERSION, settings
 from .limiter import limiter
 
 from slowapi import _rate_limit_exceeded_handler
@@ -167,7 +167,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Libation API", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Libation API", version=APP_VERSION, lifespan=lifespan)
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -194,7 +194,7 @@ app.include_router(chaptarr_router.router)
 
 @app.get("/api/health", include_in_schema=False)
 def health():
-    return JSONResponse({"status": "ok", "version": "0.4.0"})
+    return JSONResponse({"status": "ok", "version": APP_VERSION})
 
 
 # Serve React build — must come after API routes
