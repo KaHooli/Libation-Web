@@ -16,7 +16,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = DEFAULT_DATABASE_URL
 
     ADMIN_USERNAME: str = "admin"
-    ADMIN_PASSWORD: str = "admin"
+    #: Blank means "not supplied", and a first startup then generates a random
+    #: password and prints it to stdout instead of defaulting to admin/admin.
+    #: Setting it explicitly keeps the old behaviour, so an existing deployment
+    #: that passes ADMIN_PASSWORD is unaffected by the change.
+    ADMIN_PASSWORD: str = ""
 
     LIBATION_CLI: str = "/usr/bin/libationcli"
     LIBATION_CONFIG: str = "/config"
@@ -56,6 +60,16 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
+    @property
+    def admin_password_supplied(self) -> bool:
+        """Whether a deployment pinned the seed password itself.
+
+        When it did, the seeded admin behaves exactly as it always has. When it
+        did not, the password is generated and the account is held at a change
+        prompt until it is replaced.
+        """
+        return bool(self.ADMIN_PASSWORD)
 
     @property
     def oidc_configured(self) -> bool:

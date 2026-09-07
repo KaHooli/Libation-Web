@@ -69,8 +69,9 @@
       <Mode/>
     </Variable>
     <Variable>
-      <Value>admin</Value>
+      <Value/>
       <Name>ADMIN_PASSWORD</Name>
+      <Description>Optional. Leave blank and a random password is generated on first start and written to the container log (Unraid: click the container icon and choose Logs) — you will be asked to change it the first time you sign in. Fill this in to choose the password yourself instead.</Description>
       <Mode/>
     </Variable>
     <Variable>

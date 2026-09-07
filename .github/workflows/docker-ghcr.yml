@@ -197,6 +197,28 @@ jobs:
       - name: Run reconciliation test
         run: PYTHONPATH=backend python scripts/test-reconcile.py
 
+  # First-run admin seeding and the forced password change. Guards the upgrade
+  # path in particular: a deployment that pins ADMIN_PASSWORD must be entirely
+  # unaffected, or an upgrade locks people out of a working install.
+  firstrun:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run first-run test
+        run: PYTHONPATH=backend python scripts/test-firstrun.py
+
   # Migrations, dual-backend support and credential encryption. Runs the whole
   # database section twice — once on SQLite, once against the PostgreSQL service
   # below — because dialect bugs only show up when something exercises Postgres.
@@ -260,7 +282,7 @@ jobs:
   # the human-readable tags. Only this job creates tags; the build job pushes
   # untagged digests.
   merge:
-    needs: [prepare, build, smoke, chaptarr, liberate, reconcile, potation, oidc]
+    needs: [prepare, build, smoke, chaptarr, liberate, reconcile, firstrun, potation, oidc]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:

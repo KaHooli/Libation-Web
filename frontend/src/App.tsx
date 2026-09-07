@@ -9,9 +9,10 @@ import { AccountsPage } from "@/pages/AccountsPage";
 import { DownloadsPage } from "@/pages/DownloadsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { LiberatePage } from "@/pages/LiberatePage";
+import { ChangePasswordRequiredPage } from "@/pages/ChangePasswordRequiredPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -19,7 +20,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  // Gate every protected route, not just one page: the generated password is
+  // printed to a log, so nothing behind it should be reachable until it has
+  // been replaced. SSO accounts are exempt — they have no usable password to
+  // change, so the prompt would be a dead end.
+  if (user?.must_change_password && !user?.is_sso_user) {
+    return <ChangePasswordRequiredPage />;
+  }
+  return <>{children}</>;
 }
 
 function PublicRoute({ children }: { children: React.ReactNode }) {

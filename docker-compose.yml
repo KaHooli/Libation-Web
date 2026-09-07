@@ -16,7 +16,11 @@ services:
       - ./audiobooks:/audiobooks
     environment:
       - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin
+      # Left unset on purpose: the first startup generates a random password
+      # and prints it to the container log (`docker compose logs libation`),
+      # and you are asked to change it the first time you sign in. Set it here
+      # to choose the password yourself and skip that prompt.
+      # - ADMIN_PASSWORD=
       - SECRET_KEY=change-me-use-a-long-random-string
       - ACCESS_TOKEN_EXPIRE_MINUTES=15
       - REFRESH_TOKEN_EXPIRE_DAYS=60
