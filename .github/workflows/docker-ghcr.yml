@@ -242,6 +242,28 @@ jobs:
       - name: Run DRM test
         run: PYTHONPATH=backend python scripts/test-drm.py
 
+  # The streaming download: cancellation, resume, and progress, against a real
+  # HTTP server in-process. The failure it guards is a corrupt file of plausible
+  # size — a CDN that ignores a Range request and resends the whole body.
+  download:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run download test
+        run: PYTHONPATH=backend python scripts/test-download.py
+
   # Settings backup and restore. The sharp edges are the secrets: the OIDC
   # client secret has to be decrypted out and re-encrypted in (the key does not
   # travel), a sanitised backup must not wipe the secrets it declined to carry,
@@ -328,7 +350,7 @@ jobs:
   # the human-readable tags. Only this job creates tags; the build job pushes
   # untagged digests.
   merge:
-    needs: [prepare, build, smoke, chaptarr, liberate, reconcile, firstrun, backup, drm, potation, oidc]
+    needs: [prepare, build, smoke, chaptarr, liberate, reconcile, firstrun, backup, drm, download, potation, oidc]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
