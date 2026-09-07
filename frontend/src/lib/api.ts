@@ -41,6 +41,25 @@ api.interceptors.response.use(
   }
 );
 
+/** Fetch a file from an authenticated endpoint and hand it to the browser.
+ *
+ *  A plain `<a href download>` cannot be used for these: the access token lives
+ *  in memory and is attached by the request interceptor, so a link navigation
+ *  arrives with no Authorization header and is refused. Fetching as a blob and
+ *  clicking a synthetic object-URL link is what actually downloads the file. */
+export async function downloadFile(url: string, filename: string, params?: Record<string, unknown>) {
+  const { data } = await api.get(url, { params, responseType: "blob" });
+  const href = URL.createObjectURL(data as Blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoked on the next tick — immediately would race the click in Safari.
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+}
+
 export interface AuthConfig {
   password_login_enabled: boolean;
   oidc_enabled: boolean;
@@ -135,6 +154,46 @@ export const settingsApi = {
 
   getStats: () =>
     api.get("/settings/stats"),
+};
+
+// ── Settings backup / restore (admin only) ──────────────────────────────────
+
+export type BackupSection = "chaptarr" | "oidc" | "libation";
+
+export interface SettingsBackupDoc {
+  format: string;
+  version: number;
+  exported_at?: string;
+  app_version?: string;
+  includes_secrets: boolean;
+  secrets_omitted: string[];
+  oidc_env_locked?: string[];
+  chaptarr?: Record<string, unknown>;
+  oidc?: Record<string, unknown>;
+  libation?: Record<string, unknown>;
+}
+
+export interface RestoreReport {
+  applied: BackupSection[];
+  skipped: BackupSection[];
+  env_locked: string[];
+  secrets_missing: string[];
+  warnings: string[];
+}
+
+export const backupApi = {
+  /** Streams the JSON document straight to disk. With secrets it holds the
+   *  Chaptarr API key and the OIDC client secret in plain text. */
+  download: (includeSecrets: boolean) =>
+    downloadFile(
+      "/settings/backup",
+      `libation-web-settings-${new Date().toISOString().slice(0, 10)}.json`,
+      { include_secrets: includeSecrets }
+    ),
+
+  // `sections` omitted restores every section the file carries.
+  restore: (backup: SettingsBackupDoc, sections?: BackupSection[]) =>
+    api.post<RestoreReport>("/settings/restore", { backup, sections }),
 };
 
 // Chaptarr API

@@ -3,6 +3,10 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 import secrets
 
+#: One source of truth for the version reported by /api/health, the OpenAPI
+#: document and a settings backup.
+APP_VERSION = "0.4.0"
+
 #: SQLite on the /data volume. PostgreSQL is opt-in by setting DATABASE_URL.
 DEFAULT_DATABASE_URL = "sqlite:////data/app.db"
 

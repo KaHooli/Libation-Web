@@ -283,7 +283,7 @@ The traffic runs both ways: with `chaptarr_skip_existing` on, a book Chaptarr al
 - `is_admin` column added via startup migration (`_migrate_db`) using `ALTER TABLE` + `PRAGMA table_info`
 
 ## Settings page layout (`frontend/src/pages/SettingsPage.tsx`)
-`SettingsPage` is a thin tabbed shell; every section lives in its own file under `frontend/src/components/settings/`. Tabs, in order: **Account** (update-credentials when on defaults, 2FA, username, password, sessions), **Library** (Libation download toggles), **Integrations** (Chaptarr), **Users** (management + permissions), **Sign-in** (OIDC), **System** (about, logs, API docs).
+`SettingsPage` is a thin tabbed shell; every section lives in its own file under `frontend/src/components/settings/`. Tabs, in order: **Account** (update-credentials when on defaults, 2FA, username, password, sessions), **Library** (Libation download toggles), **Integrations** (Chaptarr), **Users** (management + permissions), **Sign-in** (OIDC), **System** (about, backup & restore, logs, API docs).
 
 - `adminOnly` tabs are hidden outright for non-admins rather than rendered empty. Sections *within* a visible tab are still individually gated — `System` shows About to everyone but Logs and API docs only to admins
 - The active tab is held in `?tab=` so a section can be linked to and survives a reload. An unknown or now-forbidden id falls back to the first tab the user can see; the fallback never rewrites the URL, so an admin deep-link still resolves once `user` finishes loading
@@ -292,11 +292,27 @@ The traffic runs both ways: with `chaptarr_skip_existing` on, a book Chaptarr al
 ## Settings & Stats (`backend/app/api/settings.py`)
 - `GET/PUT /api/settings/libation` — reads/writes `/config/appsettings.json` (resilient: merges only known keys)
 - `GET /api/settings/stats` — total_books (LibationContext.db), total_downloads (our DB), accounts_count (bridge `/accounts`), downloads_per_user (JOIN)
-- Field map: Python snake_case ↔ Libation PascalCase key names
+- The appsettings read/parse/write and the snake_case ↔ PascalCase field map live in `services/appsettings.py`, not in the API module — the settings backup needs the same file, and two copies of the field map would drift
+
+## Settings backup & restore (`backend/app/services/backup.py`)
+One JSON document holding the **settings**, not the data: the Chaptarr connection, the OIDC provider and Libation's download toggles. Users, sessions, download history and the library are not settings and are not in it.
+
+- `GET /api/settings/backup?include_secrets=true` — admin-only; `Content-Disposition: attachment`, `Cache-Control: no-store`
+- `POST /api/settings/restore` — admin-only; body `{backup, sections?}`, returns `{applied, skipped, env_locked, secrets_missing, warnings}`. `sections` omitted restores every section the file carries
+- **The OIDC client secret leaves as plaintext and is re-encrypted on the way in.** It is stored Fernet-encrypted under `potation.key`, which deliberately does *not* travel with the backup — shipping the ciphertext would restore to a secret the destination cannot read, and a bad secret looks exactly like a working one until someone tries to sign in
+- **Secrets are opt-out, not opt-in.** A restore that leaves you retyping the Chaptarr API key has not restored much. `include_secrets=false` produces a shareable copy, lists what it withheld in `secrets_omitted` (only secrets that actually exist), and the document says so about itself in `_warning`
+- **Absent means "keep what is stored", and `null` counts as absent** — `""` is how you clear a key, same as the UI. Anything that has been through a schema (the API's own pydantic model included) arrives with every optional field present and null, so reading null as "clear" would make a sanitised backup wipe the secrets it deliberately declined to carry
+- **Audible accounts are excluded in both directions.** The stored blob is a *device registration* encrypted under `potation.key`, and Amazon caps registrations — moving it would be either useless (a different key) or wrong (two installs sharing one device). Reconnecting is a login, not data loss
+- Restoring routes every section through the same `save_config` the Settings page uses, so the OIDC encryption and the env-lock rule apply for free; `env_locked` in the report names the fields the destination refused rather than reporting a restore that silently did half of it
+- **A restore cannot lock you out.** `password_login_enabled` still requires `sso_has_worked`, which a restored configuration cannot fake. An enabled-but-incomplete Chaptarr or OIDC section is inert and produces a warning
+- Every selected section is validated before any is written, so one bad value cannot leave a neighbour applied
+- Tests: `scripts/test-backup.py` (21 checks). CI job `backup` gates `merge`
+
+**Authenticated file downloads** — `downloadFile()` in `frontend/src/lib/api.ts` fetches as a blob and clicks a synthetic object-URL link. A plain `<a href download>` cannot be used: the access token lives in memory and is attached by the request interceptor, so a link navigation arrives with no `Authorization` header and is refused. Used by both the settings backup and the log download.
 
 ## Logs API (`backend/app/api/logs.py`)
 - `GET /api/logs?lines=200&level=all` — admin-only; reads `/config/logs/libation-web.log`, filters lines by `[LEVEL]` substring match, returns `{"lines": [...], "total": int, "truncated": bool}`; max 2000 lines per request
-- `GET /api/logs/download` — admin-only; serves the full log file as `text/plain` download (`libation-web.log`)
+- `GET /api/logs/download` — admin-only; serves the full log file as `text/plain` download (`libation-web.log`). Fetched with `downloadFile()`, not a plain link — see Settings backup & restore
 - **LogsSection in Settings**: dark monospace terminal viewer (h-96), level filter tabs (ALL / INFO / WARN / ERROR / DEBUG), line count selector (100/200/500/1000), manual Refresh button, Auto-refresh toggle (polls every 5s), Download button; admin-only, shown at the bottom of SettingsPage
 - **ApiDocsSection in Settings**: two links to FastAPI's built-in `/docs` (Swagger UI) and `/redoc`; admin-only, below LogsSection
 
@@ -353,6 +369,7 @@ The traffic runs both ways: with `chaptarr_skip_existing` on, a book Chaptarr al
 
 - **Settings tabs** (complete): `SettingsPage` split into Account / Library / Integrations / Users / System tabs, each section moved into its own file under `components/settings/`. Active tab in `?tab=`; admin-only tabs hidden outright; the default-credentials banner renders on every tab.
 - **OIDC in Settings** (complete): SSO moves from environment-only to editable in **Settings → Sign-in**. New `services/oidc_config.py` resolves env-over-database per field (`model_fields_set` distinguishes supplied from default), Fernet-encrypts the client secret under `system_settings`, and owns `password_login_enabled`. `OidcConfig` is threaded through every function in `oidc.py`; `settings.oidc_configured` / `password_login_enabled` removed from `config.py`. **The behaviour change that matters**: password sign-in no longer retires when SSO is merely *configured* — only once someone has actually signed in through the provider, since a wrong secret or redirect URL survives a connection test. New `GET/PUT /api/auth/oidc/settings`, `OidcSection.tsx`, and 10 further checks in `scripts/test-oidc.py`.
+- **Settings backup & restore** (complete): `GET /api/settings/backup` / `POST /api/settings/restore` (both admin-only) round-trip the Chaptarr, OIDC and Libation settings through one JSON document, restorable whole or by section. New `services/backup.py`, `services/appsettings.py` (extracted from `api/settings.py` so the backup and the API share one field map), `schemas/backup.py`, `BackupSection.tsx` on the System tab, and `downloadFile()` in `lib/api.ts` — which also fixes the log download, whose plain `<a href>` could never have carried the bearer token the endpoint requires. Secrets are included by default with an opt-out; the OIDC client secret is decrypted out and re-encrypted in, because `potation.key` stays behind. Audible device registrations are excluded either way. `scripts/test-backup.py` (21 checks), CI job `backup`. `APP_VERSION` moved to `config.py`, ending the three-way duplication of `"0.4.0"`.
 - **Generated first-run password** (complete): a fresh install no longer comes up as `admin/admin`. With `ADMIN_PASSWORD` unset, `_seed_admin` generates a random password, prints it to **stdout only** (never the log file on `/config`), and sets the new `users.must_change_password` flag; `ProtectedRoute` then holds the account at `ChangePasswordRequiredPage` until it is replaced. Restarting before that first change regenerates and reprints, so losing the password is recoverable without deleting `app.db`. Supplying `ADMIN_PASSWORD` keeps the old behaviour exactly, which is the upgrade guarantee. New revision `0005`, `scripts/test-firstrun.py` (14 checks), CI job `firstrun`.
 
 ## Pre-push sanitization (REQUIRED before any `git push`)
@@ -409,7 +426,7 @@ What "green" means here:
 
 Anything short of that is work, not a reason to wait: fix it and push. Merge with `expectedHeadSha` pinned to the commit whose CI you actually verified, so a race can't merge something unverified. Afterwards, reset the working branch onto the new `main` (`git checkout -B <branch> origin/main`) and confirm the `main` publish republished the GHCR tags to a fresh digest.
 
-This is a single-maintainer repository and there is no human review gate; the CI suites (`chaptarr`, `liberate`, `reconcile`, `potation`, `oidc`, `smoke`) are the gate. Adding a check to one of them is how you make a new invariant enforceable.
+This is a single-maintainer repository and there is no human review gate; the CI suites (`chaptarr`, `liberate`, `reconcile`, `firstrun`, `backup`, `potation`, `oidc`, `smoke`) are the gate. Adding a check to one of them is how you make a new invariant enforceable.
 
 ## Conventions
 - API routes: `/api/<resource>/<action>`

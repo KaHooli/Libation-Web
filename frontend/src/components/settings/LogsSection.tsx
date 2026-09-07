@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ScrollText, RefreshCw, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, downloadFile } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 
 const LOG_LEVELS = ["ALL", "INFO", "WARN", "ERROR", "DEBUG"] as const;
@@ -63,13 +63,15 @@ export function LogsSection() {
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
-            <a
-              href="/api/logs/download"
-              download="libation-web.log"
+            {/* Fetched, not linked: /api/logs/download is admin-only and the
+                access token lives in memory, so a bare href arrives with no
+                Authorization header and is refused. */}
+            <button
+              onClick={() => downloadFile("/logs/download", "libation-web.log")}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
             >
               <Download className="h-3.5 w-3.5" /> Download
-            </a>
+            </button>
             <button
               onClick={() => fetchLogs(false)}
               disabled={loading}

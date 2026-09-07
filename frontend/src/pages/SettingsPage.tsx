@@ -16,6 +16,7 @@ import { LibationSettingsSection } from "@/components/settings/LibationSettingsS
 import { UserManagementSection, UserPermissionsSection } from "@/components/settings/UsersSection";
 import { LogsSection } from "@/components/settings/LogsSection";
 import { AboutSection, ApiDocsSection } from "@/components/settings/SystemSection";
+import { BackupSection } from "@/components/settings/BackupSection";
 import { OidcSection } from "@/components/settings/OidcSection";
 
 // ── Tabs ────────────────────────────────────────────────────────────────────
@@ -134,6 +135,7 @@ export function SettingsPage() {
       {active === "system" && (
         <>
           <AboutSection />
+          {user?.is_admin && <BackupSection />}
           {user?.is_admin && <LogsSection />}
           {user?.is_admin && <ApiDocsSection />}
         </>

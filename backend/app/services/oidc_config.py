@@ -23,7 +23,6 @@ half-finished config.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -65,6 +64,10 @@ _FIELDS: tuple[tuple[str, str, str], ...] = (
     ("oidc_admin_group", "OIDC_ADMIN_GROUP", "admin_group"),
     ("oidc_auto_create_users", "OIDC_AUTO_CREATE_USERS", "auto_create_users"),
 )
+
+#: The configurable field names on OidcConfig. `env_locked` is deliberately not
+#: one of them: it describes the machine, not the configuration.
+FIELD_NAMES: tuple[str, ...] = tuple(name for _key, _env, name in _FIELDS)
 
 _BOOL_FIELDS = frozenset({"enabled", "auto_create_users"})
 
