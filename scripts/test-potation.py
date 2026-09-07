@@ -691,6 +691,162 @@ def test_census_verdict() -> None:
     print("✓ the census verdict reflects the sample, and failures are not answers")
 
 
+def test_census_refuses_to_measure_a_sample_that_did_not_answer() -> None:
+    """The failure mode a real run actually hit.
+
+    Sampling the ASINs of individual parts produced 23 refusals out of 25, and
+    the verdict then reported "50.0% needs a CDM" off the two that answered —
+    a number with no information in it, phrased as a decision. Two guards: a
+    handful of answers is never a percentage, and the part-ASIN refusal is
+    named so the cause is obvious rather than buried in a list of failures.
+    """
+    from collections import Counter
+    from app.services.potation.license import DrmCensus, PART_ASIN_REFUSED
+
+    part_failures = [
+        (f"B0CD{i:06d}", f"B0CD{i:06d}: Not Found (404): {PART_ASIN_REFUSED}.")
+        for i in range(23)
+    ]
+    real_run = DrmCensus(
+        sampled=25, counts=Counter({"Mpeg": 1, "Widevine": 1}), failures=part_failures,
+    )
+    assert real_run.answered == 2
+    verdict = real_run.verdict()
+    assert "50" not in verdict, f"a 1-of-2 split was reported as a percentage: {verdict}"
+    assert "too few" in verdict, verdict
+    assert len(real_run.part_asin_failures) == 23
+    print("✓ a sample that mostly failed is refused as a measurement, not averaged")
+
+    # All parts and nothing else: say what is wrong, not "your library is fine".
+    all_parts = DrmCensus(sampled=23, failures=part_failures)
+    assert "part" in all_parts.verdict().lower(), all_parts.verdict()
+    assert "sample is wrong, not the library" in all_parts.verdict()
+    print("✓ an all-part sample names the cause instead of reporting an empty result")
+
+    # Enough answers, and the percentage comes back.
+    real = DrmCensus(sampled=30, counts=Counter({"Adrm": 27, "Widevine": 3}))
+    assert "10.0%" in real.verdict(), real.verdict()
+    print("✓ a sample with enough answers is still reported as a percentage")
+
+
+def _census_scratch_db(name: str):
+    """A migrated-shape database for the census query tests.
+
+    Every model has to be imported before `create_all`, not just the potation
+    ones: the potation tables carry foreign keys to `users`, and `User` in turn
+    relates to `Download`, so a partial import leaves the mapper unresolved.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database import Base
+    from app.models import chaptarr, download, potation, user
+
+    # Imported for their side effect — registering with Base.metadata — so name
+    # them here rather than leaving what looks like four unused imports.
+    assert all((chaptarr, download, potation, user))
+
+    engine = create_engine(
+        f"sqlite:///{DATA / name}", connect_args={"check_same_thread": False}
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)
+
+
+def test_census_samples_owned_titles_not_parts() -> None:
+    """The query must pick what Audible will actually license.
+
+    A multi-part title is one purchase with one licensable ASIN; its parts are
+    rows we derive for ordering. Sampling the parts is what made the first run
+    meaningless, so the shape of this query is the thing under test.
+    """
+    from app.models.potation import AudibleAccount, Book
+    from app.services.potation.license import run_census
+
+    Session = _census_scratch_db("census-sample.db")
+    with Session() as db:
+        db.add(AudibleAccount(account_id="ACCT", locale="us", auth_blob="x"))
+        db.add(Book(asin="STANDALONE", account_id="ACCT", title="Solo"))
+        db.add(Book(asin="PARENT", account_id="ACCT", title="Epic",
+                    is_multipart_parent=True))
+        for i in (1, 2, 3):
+            db.add(Book(asin=f"PART{i}", account_id="ACCT", title=f"Epic, Part {i}",
+                        parent_asin="PARENT", part_index=i))
+        db.commit()
+
+        account = db.query(AudibleAccount).one()
+        probed: list[str] = []
+
+        # Record what would be asked for without issuing a single request.
+        import app.services.potation.license as lic
+        original = lic.request_license
+        lic.request_license = lambda *a, **k: (_ for _ in ()).throw(
+            lic.LicenseError(f"{a[2]}: stub")
+        ) if probed.append(a[2]) is None else None
+        try:
+            run_census(db, account, sample_size=None)
+        finally:
+            lic.request_license = original
+
+    assert "PARENT" in probed, "the multi-part parent was not sampled"
+    assert "STANDALONE" in probed, "a standalone book was not sampled"
+    assert not [a for a in probed if a.startswith("PART")], (
+        f"the census sampled individual parts, which Audible refuses: {probed}"
+    )
+    print("✓ the census samples owned titles — parents and standalone, never parts")
+
+
+def test_census_reasks_as_a_native_engine_before_calling_it_blocked() -> None:
+    """A CDM answer to "what can you serve?" is not "we cannot have this".
+
+    The first ask advertises every scheme, so Audible replies with what it would
+    prefer. The download pipeline will only ever claim Adrm and Mpeg, and
+    Audible may fall back to AAXC for such a client — so a title is only
+    unreachable once it is refused on those terms too.
+    """
+    from app.models.potation import AudibleAccount, Book
+    import app.services.potation.license as lic
+
+    Session = _census_scratch_db("census-reprobe.db")
+    with Session() as db:
+        db.add(AudibleAccount(account_id="ACCT2", locale="us", auth_blob="x"))
+        db.add(Book(asin="FALLBACK", account_id="ACCT2", title="Prefers Widevine"))
+        db.add(Book(asin="TRULYBLOCKED", account_id="ACCT2", title="Widevine only"))
+        db.commit()
+        account = db.query(AudibleAccount).one()
+
+        asks: list[tuple[str, object]] = []
+
+        def fake_request(db_, acct, asin, *, drm_types=None, **kw):
+            asks.append((asin, tuple(drm_types) if drm_types else None))
+            narrowed = drm_types is not None
+            if asin == "FALLBACK":
+                return lic.parse_license(
+                    asin, {"content_license": {
+                        "drm_type": "Adrm" if narrowed else "Widevine"}}
+                )
+            if narrowed:
+                raise lic.LicenseError(f"{asin}: no native format available")
+            return lic.parse_license(asin, {"content_license": {"drm_type": "Widevine"}})
+
+        original = lic.request_license
+        lic.request_license = fake_request
+        try:
+            census = lic.run_census(db, account, sample_size=None)
+        finally:
+            lic.request_license = original
+
+    assert census.fell_back_to_native == ["FALLBACK"], census.fell_back_to_native
+    assert census.unreachable == ["TRULYBLOCKED"], census.unreachable
+    assert census.native_capable == 1 and census.cdm_required == 1
+
+    # The narrowed ask happened, and only for titles that looked blocked.
+    narrowed = [a for a in asks if a[1] is not None]
+    assert len(narrowed) == 2, asks
+    assert all(set(a[1]) == set(lic.NATIVE_DRM_TYPES) for a in narrowed), asks
+    print("✓ a CDM answer is re-asked on native terms before counting as blocked")
+
+
 # ── Sign-in URL safety ────────────────────────────────────────────────────────
 
 def test_login_url_validation() -> None:
@@ -808,6 +964,9 @@ def main() -> None:
     test_library_shaping()
     test_license_parsing()
     test_census_verdict()
+    test_census_refuses_to_measure_a_sample_that_did_not_answer()
+    test_census_samples_owned_titles_not_parts()
+    test_census_reasks_as_a_native_engine_before_calling_it_blocked()
     test_login_url_validation()
     test_authorization_code_extraction()
 

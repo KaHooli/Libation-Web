@@ -181,6 +181,13 @@ def _persist(db: Session, info: LicenseInfo) -> None:
 
 # ── The census ────────────────────────────────────────────────────────────────
 
+#: Audible's refusal when handed the ASIN of one part of a multi-part title.
+#: Worth recognising by sight: it means the *sample* was wrong, not that the
+#: title is unavailable, and 20-odd of these will otherwise read as a library
+#: that cannot be licensed at all.
+PART_ASIN_REFUSED = "Audio Part asins are no longer supported"
+
+
 @dataclass
 class DrmCensus:
     """What a native engine could and could not fetch."""
@@ -189,6 +196,18 @@ class DrmCensus:
     counts: Counter = field(default_factory=Counter)
     failures: list[tuple[str, str]] = field(default_factory=list)
     unreachable: list[str] = field(default_factory=list)
+    #: Titles Audible served under a CDM scheme when offered every option, but
+    #: served natively once we asked as the download pipeline actually will.
+    #: These are *not* blocked — counting them as blocked overstates the problem.
+    fell_back_to_native: list[str] = field(default_factory=list)
+
+    @property
+    def part_asin_failures(self) -> list[tuple[str, str]]:
+        return [(a, m) for a, m in self.failures if PART_ASIN_REFUSED in m]
+
+    @property
+    def answered(self) -> int:
+        return self.sampled - len(self.failures)
 
     @property
     def native_capable(self) -> int:
@@ -205,14 +224,29 @@ class DrmCensus:
     @property
     def blocked_fraction(self) -> float:
         """Share of the sample a pure-Python engine could not fetch."""
-        answered = self.sampled - len(self.failures)
-        if answered <= 0:
+        if self.answered <= 0:
             return 0.0
-        return (self.sampled - len(self.failures) - self.native_capable) / answered
+        return (self.answered - self.native_capable) / self.answered
 
     def verdict(self) -> str:
-        if self.sampled - len(self.failures) == 0:
+        if self.answered == 0:
+            parts = len(self.part_asin_failures)
+            if parts:
+                return (
+                    f"No titles could be checked: {parts} of {self.sampled} were the "
+                    "ASINs of individual parts, which Audible no longer licenses. "
+                    "The sample is wrong, not the library — re-run after updating."
+                )
             return "No titles could be checked — the sample produced no answers."
+
+        # A sample too small to divide is a sample, not a measurement.
+        if self.answered < 5:
+            return (
+                f"Only {self.answered} of {self.sampled} titles answered — too few to "
+                "put a percentage on. Fix whatever caused the failures and re-run "
+                "before reading anything into this."
+            )
+
         pct = self.blocked_fraction * 100
         if pct == 0:
             return (
@@ -229,6 +263,37 @@ class DrmCensus:
             "That is enough to change the plan — keep LibationCli as a fallback "
             "for those titles rather than deleting it."
         )
+
+
+def _reprobe_as_native(
+    db: Session,
+    account: AudibleAccount,
+    asin: str,
+    consumption_type: str,
+    census: DrmCensus,
+    logger: Any,
+) -> Optional[LicenseInfo]:
+    """Re-ask claiming only the DRM a native engine can actually handle.
+
+    Returns the second answer when it is natively downloadable, `None` when the
+    title is genuinely out of reach. Costs one extra license request, and only
+    for titles that looked blocked on the first ask.
+    """
+    try:
+        second = request_license(
+            db, account, asin, drm_types=NATIVE_DRM_TYPES,
+            consumption_type=consumption_type, persist=True,
+        )
+    except LicenseError as exc:
+        # A refusal here is the meaningful answer: offered only what we can
+        # decrypt, Audible has nothing to give us.
+        logger.info("[potation-census] %s: no native license available (%s)", asin, exc)
+        return None
+
+    if second.natively_downloadable:
+        census.fell_back_to_native.append(asin)
+        return second
+    return None
 
 
 def run_census(
@@ -253,8 +318,12 @@ def run_census(
             db.query(Book.asin)
             .filter(
                 Book.account_id == account.account_id,
-                # A multi-part parent has no content of its own to license.
-                Book.is_multipart_parent.is_(False),
+                # One probe per *owned title*: standalone books and multi-part
+                # parents, never the individual parts. Audible refuses a part
+                # ASIN outright ("Audio Part asins are no longer supported"), so
+                # sampling parts measures nothing at all — which is exactly what
+                # the first real run of this did.
+                Book.parent_asin.is_(None),
             )
             .order_by(Book.purchase_date.desc().nullslast(), Book.asin)
         )
@@ -272,6 +341,16 @@ def run_census(
             census.failures.append((asin, str(exc)))
             logger.warning("[potation-census] %s", exc)
         else:
+            # The first ask offers every scheme, so Audible answers with what it
+            # would *prefer* to serve. That is not the same question as "could a
+            # native engine get this title": Audible may well fall back to AAXC
+            # for a client that never claims Widevine support. Asking again the
+            # way the download pipeline actually will is what separates "we
+            # cannot fetch this" from "we did not ask properly".
+            if not info.natively_downloadable:
+                info = _reprobe_as_native(
+                    db, account, asin, consumption_type, census, logger
+                ) or info
             census.counts[info.drm_type or "unknown"] += 1
             if not info.natively_downloadable:
                 census.unreachable.append(asin)
