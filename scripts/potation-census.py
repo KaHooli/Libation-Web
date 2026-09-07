@@ -18,12 +18,17 @@ still need LibationCli.
     # 3. Measure. Samples 25 titles by default
     PYTHONPATH=backend python scripts/potation-census.py census --sample 25
 
-    # 4. Release the device registration when you are done
+    # 4. Release the device registration once you are FINISHED measuring
     PYTHONPATH=backend python scripts/potation-census.py disconnect
 
 Step 4 is not optional housekeeping: `login` registers a device on the Amazon
 account, Amazon caps how many an account may hold, and deleting the scratch
 directory does *not* release one — the registration lives at Amazon.
+
+But do it **last**, not after every run. `disconnect` removes the account row,
+so the next census needs a fresh `login` — which spends another registration.
+While you are still iterating, leave the account connected and just re-run
+`census`; the synced library is reused and costs nothing.
 
 Point DATABASE_URL and LIBATION_CONFIG at your real install to use accounts you
 have already connected. Left unset, this keeps its own database and credential
@@ -205,6 +210,10 @@ def cmd_disconnect(args) -> int:
     an account may hold, so a census that leaves one stranded costs a slot for
     nothing. Removing the scratch directory alone would *not* release it — the
     registration lives at Amazon, not on disk.
+
+    The account row goes with it, so this is a one-way door for the session:
+    another census means another `login`, which spends another registration.
+    Run it when the measuring is finished, not between runs.
     """
     with SessionLocal() as db:
         rows = db.query(AudibleAccount).order_by(AudibleAccount.account_id).all()
@@ -216,6 +225,16 @@ def cmd_disconnect(args) -> int:
         if not targets:
             print(f"No account {args.account_id!r}. Try `accounts`.", file=sys.stderr)
             return 1
+
+        if not args.yes:
+            print(
+                "This removes the account and releases its device registration.\n"
+                "Another census afterwards needs a fresh `login`, which spends\n"
+                "another registration — so only do this once you are finished."
+            )
+            if input("Continue? [y/N] ").strip().lower() != "y":
+                print("Left connected.")
+                return 0
 
         for account in targets:
             print(f"Disconnecting {account.account_id} ({account.account_name or '-'}) ...")
@@ -274,6 +293,10 @@ def main() -> int:
     p_disc.add_argument(
         "account_id", nargs="?", default=None,
         help="which account; omitted disconnects all of them",
+    )
+    p_disc.add_argument(
+        "-y", "--yes", action="store_true",
+        help="skip the confirmation prompt",
     )
     p_disc.set_defaults(func=cmd_disconnect)
 
