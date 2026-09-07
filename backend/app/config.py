@@ -71,26 +71,11 @@ class Settings(BaseSettings):
         """
         return bool(self.ADMIN_PASSWORD)
 
-    @property
-    def oidc_configured(self) -> bool:
-        """True only when SSO could actually complete a login.
-
-        Deliberately stricter than `OIDC_ENABLED`: a half-filled configuration
-        must not be able to switch password login off, or a typo in the issuer
-        locks every user out.
-        """
-        return bool(
-            self.OIDC_ENABLED
-            and self.OIDC_ISSUER.strip()
-            and self.OIDC_CLIENT_ID.strip()
-            and self.OIDC_CLIENT_SECRET.strip()
-        )
-
-    @property
-    def password_login_enabled(self) -> bool:
-        if self.ALLOW_PASSWORD_LOGIN is not None:
-            return self.ALLOW_PASSWORD_LOGIN
-        return not self.oidc_configured
+    # `oidc_configured` and `password_login_enabled` used to live here. They
+    # moved to `services/oidc_config.py` when SSO became editable in Settings:
+    # both now depend on the database — one for the stored configuration, the
+    # other for whether anyone has actually signed in through the provider —
+    # and answering from env alone would be answering the wrong question.
 
 
 settings = Settings()

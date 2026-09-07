@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  UserCog, Sliders, Plug, Users, ServerCog, ShieldAlert,
+  UserCog, Sliders, Plug, Users, ServerCog, ShieldAlert, KeyRound,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,10 +16,11 @@ import { LibationSettingsSection } from "@/components/settings/LibationSettingsS
 import { UserManagementSection, UserPermissionsSection } from "@/components/settings/UsersSection";
 import { LogsSection } from "@/components/settings/LogsSection";
 import { AboutSection, ApiDocsSection } from "@/components/settings/SystemSection";
+import { OidcSection } from "@/components/settings/OidcSection";
 
 // ── Tabs ────────────────────────────────────────────────────────────────────
 
-type TabId = "account" | "library" | "integrations" | "users" | "system";
+type TabId = "account" | "library" | "integrations" | "users" | "signin" | "system";
 
 interface TabDef {
   id: TabId;
@@ -34,6 +35,7 @@ const TABS: TabDef[] = [
   { id: "library", label: "Library", icon: Sliders, adminOnly: true },
   { id: "integrations", label: "Integrations", icon: Plug, adminOnly: true },
   { id: "users", label: "Users", icon: Users, adminOnly: true },
+  { id: "signin", label: "Sign-in", icon: KeyRound, adminOnly: true },
   { id: "system", label: "System", icon: ServerCog },
 ];
 
@@ -126,6 +128,8 @@ export function SettingsPage() {
           <UserPermissionsSection />
         </>
       )}
+
+      {active === "signin" && <OidcSection />}
 
       {active === "system" && (
         <>

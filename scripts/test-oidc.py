@@ -66,6 +66,7 @@ def assert_no_stray_dirs() -> None:
 from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from jose import jwt  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 
 # ── A signing key for the stub provider ───────────────────────────────────────
 
@@ -201,6 +202,22 @@ def configure(**overrides) -> None:
     oidc_svc.clear_cache()
 
 
+def unpin_env() -> None:
+    """Forget every OIDC value the environment (or `configure`) pinned.
+
+    `load_config` treats a field in `model_fields_set` as environment-supplied
+    and authoritative, so clearing it is what hands control back to the
+    database — which is the path the Settings UI drives.
+    """
+    from app.config import settings
+    from app.services.oidc_config import _FIELDS
+
+    for _key, env_var, _name in _FIELDS:
+        settings.model_fields_set.discard(env_var)
+    settings.ALLOW_PASSWORD_LOGIN = None
+    settings.model_fields_set.discard("ALLOW_PASSWORD_LOGIN")
+
+
 def start_flow(client, next_path=None):
     """Kick off a login and return (state, nonce) from the redirect."""
     url = "/api/auth/oidc/login" + (f"?next={next_path}" if next_path else "")
@@ -261,15 +278,34 @@ def main() -> None:
             assert cfg["oidc_enabled"] is False and cfg["password_login_enabled"] is True, cfg
             print("✓ an incomplete SSO config leaves password login alone")
 
+            # A complete config is NOT enough on its own. Password login stays
+            # on until SSO has actually carried someone in — a config can be
+            # complete and still broken (wrong secret, wrong redirect URL), and
+            # switching password login off on faith is how you lock yourself out.
             configure()
             cfg = client.get("/api/auth/config").json()
-            assert cfg["oidc_enabled"] is True and cfg["password_login_enabled"] is False, cfg
+            assert cfg["oidc_enabled"] is True, cfg
+            assert cfg["password_login_enabled"] is True, (
+                "password login was switched off before anyone had signed in via SSO", cfg
+            )
+            assert client.post("/api/auth/login",
+                               json={"username": "admin", "password": "admin"}).status_code == 200
+            print("✓ a complete SSO config alone does not switch password login off")
+
+            # Now let a real SSO login happen. That is the proof, and only then
+            # does password sign-in step aside.
+            state, nonce = start_flow(client)
+            assert callback(client, state, make_id_token(nonce=nonce)).status_code == 303
+            cfg = client.get("/api/auth/config").json()
+            assert cfg["password_login_enabled"] is False, (
+                "a successful SSO login should retire password sign-in", cfg
+            )
             r = client.post("/api/auth/login", json={"username": "admin", "password": "admin"})
             assert r.status_code == 403, (r.status_code, r.text)
             assert "ALLOW_PASSWORD_LOGIN" in r.json()["detail"]
             r2 = client.post("/api/auth/verify-2fa", json={"temp_token": "x", "code": "000000"})
             assert r2.status_code == 403, r2.status_code
-            print("✓ enabling SSO disables password login, and says how to undo it")
+            print("✓ once SSO has really worked, password login retires and says how to undo it")
 
             configure(allow_password=True)
             cfg = client.get("/api/auth/config").json()
@@ -277,6 +313,15 @@ def main() -> None:
             assert client.post("/api/auth/login",
                                json={"username": "admin", "password": "admin"}).status_code == 200
             print("✓ ALLOW_PASSWORD_LOGIN=true re-enables password login alongside SSO")
+
+            # Pointing at a different provider does not inherit the old one's
+            # proof, so a fresh misconfiguration cannot ride in on a past login.
+            configure(issuer="https://elsewhere.example")
+            cfg = client.get("/api/auth/config").json()
+            assert cfg["password_login_enabled"] is True, (
+                "a previous provider's successful login vouched for a new one", cfg
+            )
+            print("✓ switching provider does not inherit the previous one's proof")
 
             # ── The happy path ────────────────────────────────────────────
             configure()
@@ -428,6 +473,95 @@ def main() -> None:
             assert r.headers["location"] == "/liberate", r.headers
             print("✓ next paths are honoured but cannot point off-site")
             client.cookies.clear()
+
+            # ── Configuring SSO from Settings rather than the environment ──
+            #
+            # Everything above pins the config by assigning to `settings`,
+            # which pydantic records in `model_fields_set` exactly as it
+            # records an env var — so those runs all exercised the env path.
+            # Unpin it and the same flows must work off the database.
+            # SSO has already carried someone in by this point, so password
+            # login is retired — take the escape hatch to get an admin token.
+            configure(allow_password=True)
+            client.cookies.clear()
+            token = client.post("/api/auth/login",
+                                json={"username": "admin", "password": "admin"}).json()
+            assert "access_token" in token, token
+            h = {"Authorization": f"Bearer {token['access_token']}"}
+
+            r = client.get("/api/auth/oidc/settings", headers=h)
+            assert r.status_code == 200, r.text
+            locked = set(r.json()["env_locked"])
+            assert {"issuer", "client_id", "client_secret"} <= locked, locked
+            print("✓ fields pinned by the environment are reported as locked")
+
+            # A save must not silently pretend to change an env-pinned field.
+            client.put("/api/auth/oidc/settings", headers=h,
+                       json={"issuer": "https://ignored.example"})
+            assert client.get("/api/auth/oidc/settings", headers=h).json()["issuer"] == ISSUER
+            print("✓ saving over an environment-pinned field changes nothing")
+
+            unpin_env()
+            oidc_svc.clear_cache()
+            assert client.get("/api/auth/config").json()["oidc_enabled"] is False, (
+                "unpinning the environment should leave nothing configured"
+            )
+
+            # Check the permission gate here, while nothing is configured and
+            # password sign-in is therefore still available to get a token.
+            client.post("/api/users", headers=h, json={
+                "username": "nonadmin", "password": "password123", "is_admin": False})
+            t2 = client.post("/api/auth/login",
+                             json={"username": "nonadmin", "password": "password123"}).json()
+            h2 = {"Authorization": f"Bearer {t2['access_token']}"}
+            assert client.get("/api/auth/oidc/settings", headers=h2).status_code == 403
+            assert client.put("/api/auth/oidc/settings", headers=h2, json={}).status_code == 403
+            assert client.post("/api/auth/oidc/test", headers=h2).status_code == 403
+            print("✓ the SSO settings endpoints are admin-only")
+            client.cookies.clear()
+
+            r = client.put("/api/auth/oidc/settings", headers=h, json={
+                "enabled": True, "issuer": ISSUER, "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET, "provider_name": "Stub SSO",
+                "redirect_url": "http://testserver/api/auth/oidc/callback",
+                "auto_create_users": True,
+            })
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["configured"] is True and body["client_secret_set"] is True, body
+            assert "client_secret" not in body, "the client secret must never be returned"
+            assert body["env_locked"] == [], body["env_locked"]
+            print("✓ SSO can be configured entirely from Settings, and the secret is withheld")
+
+            with SessionLocal() as db:
+                stored = db.connection().execute(
+                    text("SELECT value FROM system_settings WHERE key = 'oidc_client_secret_enc'")
+                ).scalar()
+            assert stored and CLIENT_SECRET not in stored, (
+                "the client secret is sitting in the database in the clear"
+            )
+            print("✓ the stored client secret is encrypted at rest")
+
+            # An omitted secret keeps the stored one rather than clearing it —
+            # otherwise editing the issuer would silently break sign-in.
+            client.put("/api/auth/oidc/settings", headers=h, json={"provider_name": "Renamed"})
+            after = client.get("/api/auth/oidc/settings", headers=h).json()
+            assert after["client_secret_set"] is True and after["provider_name"] == "Renamed", after
+            print("✓ an unrelated edit keeps the stored secret")
+
+            # And the DB-only configuration actually carries a real sign-in.
+            assert client.get("/api/auth/config").json()["oidc_provider_name"] == "Renamed"
+            client.cookies.clear()
+            state, nonce = start_flow(client)
+            r = callback(client, state, make_id_token(nonce=nonce, subject="db-config-sub"))
+            assert r.status_code == 303, (r.status_code, r.text)
+            print("✓ a database-only configuration completes a full sign-in")
+            client.cookies.clear()
+
+            # And the lockout guard holds for a database configuration too:
+            # that sign-in just proved SSO works, so password login retires.
+            assert client.get("/api/auth/config").json()["password_login_enabled"] is False
+            print("✓ the same lockout guard applies to a database configuration")
 
             # ── Disabled provider ─────────────────────────────────────────
             settings.OIDC_ENABLED = False

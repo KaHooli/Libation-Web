@@ -90,6 +90,21 @@ def decrypt_json(token: str) -> Any:
     return json.loads(decrypt(token))
 
 
+def try_decrypt(token: Optional[str]) -> Optional[str]:
+    """Decrypt a string, or return None when it is absent or unreadable.
+
+    Used for the stored OIDC client secret: a lost key must leave SSO looking
+    unconfigured — which keeps password sign-in on — rather than raising on
+    every request to a public endpoint.
+    """
+    if not token:
+        return None
+    try:
+        return decrypt(token)
+    except CredentialDecryptError:
+        return None
+
+
 def try_decrypt_json(token: Optional[str]) -> Optional[Any]:
     """Decrypt, or return None when the blob is absent or unreadable.
 
