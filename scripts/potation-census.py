@@ -18,6 +18,13 @@ still need LibationCli.
     # 3. Measure. Samples 25 titles by default
     PYTHONPATH=backend python scripts/potation-census.py census --sample 25
 
+    # 4. Release the device registration when you are done
+    PYTHONPATH=backend python scripts/potation-census.py disconnect
+
+Step 4 is not optional housekeeping: `login` registers a device on the Amazon
+account, Amazon caps how many an account may hold, and deleting the scratch
+directory does *not* release one — the registration lives at Amazon.
+
 Point DATABASE_URL and LIBATION_CONFIG at your real install to use accounts you
 have already connected. Left unset, this keeps its own database and credential
 key under `.potation-census/` (gitignored, and override with
@@ -172,6 +179,35 @@ def _report(census: license_svc.DrmCensus) -> None:
             print(f"    ...and {len(census.unreachable) - 20} more")
 
 
+def cmd_disconnect(args) -> int:
+    """Release the device registration this script created.
+
+    `login` registers a device on the Amazon account and Amazon caps how many
+    an account may hold, so a census that leaves one stranded costs a slot for
+    nothing. Removing the scratch directory alone would *not* release it — the
+    registration lives at Amazon, not on disk.
+    """
+    with SessionLocal() as db:
+        rows = db.query(AudibleAccount).order_by(AudibleAccount.account_id).all()
+        if not rows:
+            print("No Audible accounts connected.")
+            return 0
+
+        targets = [a for a in rows if a.account_id == args.account_id] if args.account_id else rows
+        if not targets:
+            print(f"No account {args.account_id!r}. Try `accounts`.", file=sys.stderr)
+            return 1
+
+        for account in targets:
+            print(f"Disconnecting {account.account_id} ({account.account_name or '-'}) ...")
+            auth_svc.disconnect_account(db, account.account_id)
+            print("  ✓ removed locally; device deregistration attempted at Amazon")
+
+    print("\nSafe to delete the scratch directory now:")
+    print(f"  rm -rf {SCRATCH}")
+    return 0
+
+
 def cmd_accounts(args) -> int:
     with SessionLocal() as db:
         rows = db.query(AudibleAccount).order_by(AudibleAccount.account_id).all()
@@ -212,6 +248,15 @@ def main() -> int:
         help="Download reflects what a real download would get (default)",
     )
     p_census.set_defaults(func=cmd_census)
+
+    p_disc = sub.add_parser(
+        "disconnect", help="deregister the device and remove the account"
+    )
+    p_disc.add_argument(
+        "account_id", nargs="?", default=None,
+        help="which account; omitted disconnects all of them",
+    )
+    p_disc.set_defaults(func=cmd_disconnect)
 
     args = parser.parse_args()
     run_migrations()
