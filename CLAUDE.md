@@ -76,13 +76,31 @@ SSO is configurable **in Settings → Sign-in**, not only by env var. `load_conf
 
 ## Potation — native Audible engine (in progress)
 Replaces LibationCli, the `libation-bridge` C# sidecar, and the direct reads of Libation's SQLite. Foundations, native auth, library sync, the DRM census, reconciliation and the `liberated` derivation are in. **Nothing is wired into the API yet** — LibationCli is still the engine, and `services/cli.py` / `services/libation.py` remain the live path. The download/decrypt pipeline and the API cut-over are next.
+
+### The Widevine gate — measured, and passed
+The plan made everything conditional on one number: what share of a real library Audible will only serve under a DRM scheme a Python engine cannot decrypt. Measured 2026-09-07 against a live account, 25 most recent purchases:
+
+| | |
+|---|---|
+| Answered | 25 / 25 |
+| `Adrm` | 24 |
+| `Mpeg` | 1 |
+| Needs a CDM | **0** |
+
+**24 of those 25 came back native only on the second ask.** Offered every scheme, Audible answered with a CDM type; offered only `Adrm`/`Mpeg`, it served AAXC for the same title. Under the first-ask-only logic the census originally used, this library measured **96% blocked** against a 5% threshold — the transplant would have been abandoned on an artefact of how the question was asked. This is why `_reprobe_as_native()` exists, and why it is not an optimisation.
+
+The sample is the 25 *most recent* purchases (`ORDER BY purchase_date DESC`), not a random draw — the conservative direction here, since newer titles are likelier to have moved to Widevine.
+
+**What this does not establish**, and must not be cited as if it did:
+- **A licence is not a download.** Audible offering AAXC is proven; the voucher → key/iv → ffmpeg path is not. The census deliberately does not decrypt the voucher, so it cannot overclaim. That is Phase B's gate to pass
+- **Spatial audio was not measured.** The request sends `"spatial": false`. Titles that exist only in spatial form say nothing here
 - `services/potation/creds.py` — Fernet encryption for stored Audible credentials. The key is `{LIBATION_CONFIG}/potation.key`, generated 0600 on first use, **not** derived from `SECRET_KEY` so rotating the JWT secret doesn't log out every Audible account. `try_decrypt_json()` returns `None` on a lost key so the account is flagged `needs_reauth` rather than taking startup down
 - `models/potation.py` — `audible_accounts`, `books` (incl. multi-part parent/child), `book_files` (replaces `FileLocationsV2.json`, carries `part_index` so parts don't sort lexically), `audible_licenses` (voucher reuse + `drm_type`), `download_jobs` (state machine, classified `error_code`, `cancel_requested`), `download_quota` (daily-cap ledger), `reconciliation_runs`
 - `books.liberated_override` is tri-state: NULL derives from `book_files`, 1/0 is an explicit user override
 - `services/potation/marketplaces.py` — the frontend still posts LibationCli's marketplace *names* (`"germany"`, not `"de"`); this maps them to `audible` country codes. A wrong marketplace fails late, at device registration, behind a sign-in URL that looked fine
 - `services/potation/auth.py` — two-step device registration. `begin_login()` builds the Amazon OAuth URL and stores the PKCE verifier (encrypted) + device serial on an `audible_login_states` row; `complete_login()` consumes the row **before** exchanging the code, so a double submit cannot register two devices (Amazon caps registrations). Replaces the `libationcli login-external` subprocess that was held alive in a module-level dict. `disconnect_account()` calls `deregister_device()` — the old `DELETE /api/accounts/{id}` never did, leaving a registered device behind on every removal
 - `services/potation/client.py` — `Authenticator.to_dict()/from_dict()` is the serialisation boundary; the blob is Fernet-encrypted onto `audible_accounts.auth_blob`. `client_for()` re-saves after the block because the authenticator silently refreshes expired access tokens. A blob that will not decrypt sets `needs_reauth` and drops the account from `active_accounts()` rather than raising past the caller
-- `services/potation/library.py` — library sync. Parts of a `MultiPartBook` become child rows ordered by Audible's `sort` key, which is what stops "Part 10" preceding "Part 2". **The plan's claim that "a `MultiPartBook` parent has no downloadable content" is out of date** — it came from Libation's source, and Audible now answers a licence request for a part ASIN with `404 Audio Part asins are no longer supported`. The licensable unit is the *parent*; the child rows are ours, for ordering. Phase B must license the parent — which is not yet verified to succeed, only inferred from that refusal
+- `services/potation/library.py` — library sync. Parts of a `MultiPartBook` become child rows ordered by Audible's `sort` key, which is what stops "Part 10" preceding "Part 2". **The plan's claim that "a `MultiPartBook` parent has no downloadable content" is out of date** — it came from Libation's source, and Audible now answers a licence request for a part ASIN with `404 Audio Part asins are no longer supported`. The licensable unit is the *parent*; the child rows are ours, for ordering. Phase B licenses the parent, and the census has since confirmed this works: 25 of 25 parent/standalone ASINs returned a licence
 - `services/potation/license.py` — `POST content/{asin}/licenserequest`. `content_license.drm_type` is the number the whole plan turns on: `Adrm` (AAX/AAXC) and `Mpeg` are natively downloadable; `Widevine`/`PlayReady`/`FairPlay` need a CDM we do not have. Licenses are persisted so a retry does not buy another one — a Download license counts against Audible's daily allowance
   - **The census samples `parent_asin IS NULL`** — owned titles, never individual parts. Sampling parts is what made the first real run return 23 refusals out of 25 and then report a percentage off the two that answered
   - **A CDM answer is re-asked before it counts as blocked.** The first probe advertises `ALL_DRM_TYPES`, so Audible replies with what it would *prefer* to serve; the download pipeline will only ever claim `NATIVE_DRM_TYPES`, and Audible may fall back to AAXC for such a client. `_reprobe_as_native()` asks again on those terms, and only a title refused *there* is genuinely out of reach. Counting the first answer alone overstates the blocked share
