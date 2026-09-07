@@ -122,10 +122,13 @@ def cmd_census(args) -> int:
 
         sample = None if args.sample == 0 else args.sample
         for account in accounts:
+            # Owned titles: standalone books and multi-part parents. The parts
+            # themselves are not separately licensable, so counting them here
+            # would promise a sample size the census cannot deliver.
             total = (
                 db.query(Book)
                 .filter(Book.account_id == account.account_id,
-                        Book.is_multipart_parent.is_(False))
+                        Book.parent_asin.is_(None))
                 .count()
             )
             if total == 0:
@@ -157,6 +160,7 @@ def cmd_census(args) -> int:
 
 def _report(census: license_svc.DrmCensus) -> None:
     print(f"\n  Sampled:            {census.sampled}")
+    print(f"  Answered:           {census.answered}")
     for drm, count in sorted(census.counts.items(), key=lambda kv: -kv[1]):
         flag = "native" if drm in license_svc.NATIVE_CAPABLE_DRM else "NEEDS CDM"
         print(f"    {drm:<12} {count:>5}   {flag}")
@@ -167,7 +171,22 @@ def _report(census: license_svc.DrmCensus) -> None:
         if len(census.failures) > 5:
             print(f"    ...and {len(census.failures) - 5} more")
 
+    parts = census.part_asin_failures
+    if parts:
+        print(
+            f"\n  ! {len(parts)} of those are part ASINs of multi-part titles, which\n"
+            f"    Audible no longer licenses individually. That is a fault in the\n"
+            f"    sample, not in the library — the numbers below are not a\n"
+            f"    measurement until it is fixed."
+        )
+
     print(f"\n  Natively downloadable: {census.native_capable}")
+    if census.fell_back_to_native:
+        print(
+            f"    of which {len(census.fell_back_to_native)} only after asking as a native\n"
+            f"    engine would — Audible offered a CDM scheme first, then served\n"
+            f"    these natively when we stopped claiming to support one."
+        )
     print(f"  Needs a CDM:           {census.cdm_required}")
     print(f"\n  {census.verdict()}\n")
 
