@@ -35,8 +35,18 @@ WORKDIR = Path(tempfile.mkdtemp(prefix="oidc-test-"))
 CONFIG = WORKDIR / "config"
 BOOKS = WORKDIR / "audiobooks"
 DATA = WORKDIR / "data"
-for d in (DATA, CONFIG, BOOKS):
+#: A stand-in for the built frontend. It has to exist for the SPA catch-all in
+#: main.py to be mounted at all, and that route is what makes the trailing-slash
+#: callback interesting: it matches every path, so it answers `/callback/`
+#: before Starlette's own redirect-slashes fallback is ever consulted.
+STATIC = WORKDIR / "static"
+for d in (DATA, CONFIG, BOOKS, STATIC / "assets"):
     d.mkdir(parents=True, exist_ok=True)
+(STATIC / "index.html").write_text("<!doctype html><title>SPA shell</title>")
+
+#: Outside the static root, to prove a traversal cannot reach it.
+OUTSIDE_STATIC = WORKDIR / "outside-the-static-root.txt"
+OUTSIDE_STATIC.write_text("must never be served")
 
 PROVIDER_PORT = 8799
 ISSUER = f"http://127.0.0.1:{PROVIDER_PORT}"
@@ -50,6 +60,7 @@ os.environ.setdefault("AUDIOBOOKS_DIR", str(BOOKS))
 os.environ.setdefault("SECRET_KEY", "oidc-test-only-not-a-real-secret")
 os.environ.setdefault("ADMIN_USERNAME", "admin")
 os.environ.setdefault("ADMIN_PASSWORD", "admin")
+os.environ.setdefault("STATIC_DIR", str(STATIC))
 
 PRODUCTION_PATHS = [Path("/data"), Path("/config"), Path("/audiobooks")]
 PREEXISTING = {p for p in PRODUCTION_PATHS if p.exists()}
@@ -229,17 +240,15 @@ def start_flow(client, next_path=None):
     return params["state"][0], params["nonce"][0]
 
 
-def callback(client, state, id_token, code="stub-code"):
+def callback(client, state, id_token, code="stub-code",
+             path="/api/auth/oidc/callback"):
     global next_token_response
     next_token_response = {
         "access_token": "stub-access-token",
         "token_type": "Bearer",
         "id_token": id_token,
     }
-    return client.get(
-        f"/api/auth/oidc/callback?code={code}&state={state}",
-        follow_redirects=False,
-    )
+    return client.get(f"{path}?code={code}&state={state}", follow_redirects=False)
 
 
 def sso_error(response) -> str:
@@ -351,6 +360,50 @@ def main() -> None:
             assert "oidc_subject" not in body["user"], "the subject must not be exposed"
             print("✓ the SSO session refreshes, and reports is_sso_user without leaking the subject")
             client.cookies.clear()
+
+            # ── A redirect URI registered with a trailing slash ───────────
+            # Providers store one literal callback URL and a trailing slash is
+            # an ordinary way to write it. The SPA catch-all matches every path
+            # and so answers `/callback/` itself — Starlette never reaches the
+            # redirect-slashes fallback that would otherwise cover this — and
+            # the sign-in used to end at index.html with HTTP 200: no cookie,
+            # no error, nothing in the log.
+            assert any(getattr(r, "name", "") == "spa_fallback"
+                       for r in app_module().routes), (
+                "the SPA catch-all is not mounted, so this check would pass "
+                "for the wrong reason"
+            )
+
+            state, nonce = start_flow(client)
+            r = callback(client, state, make_id_token(nonce=nonce),
+                         path="/api/auth/oidc/callback/")
+            assert r.status_code == 303 and r.headers["location"] == "/", (
+                r.status_code, r.headers.get("location"), r.text[:200])
+            assert "refresh_token" in r.cookies, r.cookies
+            print("✓ a callback URL registered with a trailing slash still signs in")
+
+            assert client.get("/api/auth/oidc/login/",
+                              follow_redirects=False).status_code == 303
+            print("✓ the login endpoint accepts a trailing slash too")
+            client.cookies.clear()
+
+            # ── The catch-all must not answer for the API ────────────────
+            missing = client.get("/api/auth/no-such-endpoint", follow_redirects=False)
+            assert missing.status_code == 404, (missing.status_code, missing.text[:200])
+            assert missing.json() == {"detail": "Not Found"}, missing.text
+            print("✓ an unmatched /api path is a 404, not the SPA shell")
+
+            page = client.get("/liberate", follow_redirects=False)
+            assert page.status_code == 200 and "SPA shell" in page.text, page.text[:200]
+            print("✓ a client-side route still gets the SPA shell")
+
+            # httpx normalises dot segments out of a URL, so drive the handler
+            # directly — on the wire nothing normalises them for us.
+            import asyncio
+            from app.main import spa_fallback
+            served = Path(asyncio.run(spa_fallback(f"../{OUTSIDE_STATIC.name}")).path)
+            assert served.resolve() == (STATIC / "index.html").resolve(), served
+            print("✓ a path escaping the static root serves the shell, not the file")
 
             # ── Refusals ──────────────────────────────────────────────────
             state, nonce = start_flow(client)

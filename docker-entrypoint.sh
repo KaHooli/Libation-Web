@@ -90,10 +90,22 @@ while true; do
     fi
 
     # ── Start uvicorn ─────────────────────────────────────────────────────────
+    # --proxy-headers makes uvicorn honour X-Forwarded-Proto/-Host/-For, so the
+    # OIDC callback URL derives as https://<public host>/... instead of the
+    # container's own http://<internal host>:8000/..., and session rows record
+    # the real client IP rather than the proxy's. uvicorn only trusts those
+    # headers from --forwarded-allow-ips, whose default (127.0.0.1) never
+    # matches a reverse proxy on a Docker network, so "*" is the useful default
+    # for a container reachable only through one. Narrow it with
+    # FORWARDED_ALLOW_IPS if port 8000 is exposed more widely than that.
+    UVICORN_ARGS=(
+        --host 0.0.0.0 --port 8000 --workers 1
+        --proxy-headers --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-*}"
+    )
     if [ "$USE_GOSU" = true ]; then
-        gosu libation uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 &
+        gosu libation uvicorn app.main:app "${UVICORN_ARGS[@]}" &
     else
-        uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 &
+        uvicorn app.main:app "${UVICORN_ARGS[@]}" &
     fi
     UVICORN_PID=$!
 

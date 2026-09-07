@@ -41,7 +41,7 @@ const TEXT_FIELDS: { key: keyof OidcSettings; label: string; hint?: string; plac
   { key: "client_id", label: "Client ID" },
   { key: "redirect_url", label: "Redirect URL",
     placeholder: "https://libation.example.com/api/auth/oidc/callback",
-    hint: "Required behind a reverse proxy — otherwise the callback URL is derived from the request, which would use the internal host." },
+    hint: "Optional — derived from the request, including X-Forwarded-Proto/-Host from a reverse proxy. Set it only if your proxy sends no X-Forwarded-* headers, and match what you registered exactly." },
   { key: "provider_name", label: "Button label", hint: "Shown on the sign-in page." },
   { key: "scopes", label: "Scopes" },
   { key: "username_claim", label: "Username claim" },

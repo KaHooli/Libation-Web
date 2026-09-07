@@ -221,6 +221,29 @@ def oidc_callback(
     return redirect
 
 
+# A provider is configured with one literal redirect URI, and a trailing slash is
+# an ordinary thing to have registered — Authentik's own "strict" entries are
+# routinely written that way. Starlette would normally answer `/callback/` with a
+# 307 to `/callback`, but the SPA catch-all in `main.py` matches every path and
+# so wins the match before that fallback is ever reached: the callback quietly
+# returned `index.html`, stranding the authorization code in the URL with no
+# cookie set and no error shown.
+#
+# Serve both spellings from the same handler rather than redirecting. A 307
+# rebuilds the URL from the request scheme, which behind a TLS-terminating proxy
+# is `http` — that would put the authorization code on the wire in cleartext.
+#
+# The aliases carry their own names so `request.url_for("oidc_callback")` keeps
+# resolving to the canonical, slash-free path.
+for _path, _endpoint, _name in (
+    ("/oidc/login/", oidc_login, "oidc_login_slash"),
+    ("/oidc/callback/", oidc_callback, "oidc_callback_slash"),
+):
+    router.add_api_route(
+        _path, _endpoint, methods=["GET"], name=_name, include_in_schema=False,
+    )
+
+
 def _oidc_settings_payload(db: Session) -> dict:
     """The configuration as the admin UI needs to see it.
 
