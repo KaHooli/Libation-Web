@@ -350,8 +350,8 @@ The traffic runs both ways: with `chaptarr_skip_existing` on, a book Chaptarr al
 ## Pre-push sanitization (REQUIRED before any `git push`)
 
 Before pushing to GitHub, the working tree must be fully sanitized. The container
-should be in a clean "factory default" state — only the default `admin/admin`
-credentials remain, no real Audible accounts, no real library data, no downloads.
+should be in a clean "factory default" state — no real user accounts, no real
+Audible accounts, no real library data, no downloads.
 
 ### Files/directories to delete
 
@@ -363,7 +363,7 @@ credentials remain, no real Audible accounts, no real library data, no downloads
 | `./config/SearchEngine/` | Lucene index built from real library |
 | `./config/potation.key` | Fernet key that decrypts stored Audible credentials in `audible_accounts.auth_blob` |
 | `./config/logs/` | Log files that may contain real email addresses |
-| `./data/app.db` | Real user accounts and sessions, plus the Chaptarr URL and API key in `system_settings`; container recreates it with default `admin/admin` on next start |
+| `./data/app.db` | Real user accounts and sessions, plus the Chaptarr URL and API key in `system_settings`; the container recreates it on next start with a freshly generated admin password printed to stdout |
 | `./audiobooks/` (contents) | Downloaded audiobook files — purge all content, keep the directory |
 
 ### Inside the running container (ephemeral, non-volume)
@@ -379,12 +379,12 @@ credentials remain, no real Audible accounts, no real library data, no downloads
 | `./config/Settings.json` | Only `{"Books": "/audiobooks"}` — no credentials |
 | `./config/appsettings.json` | Libation download toggles only — no credentials |
 | `./config/Libation/appsettings.json` | Only `{"LibationFiles":"/config"}` — recreated by entrypoint anyway |
-| `docker-compose.yml` | `SECRET_KEY` must still be the placeholder `change-me-use-a-long-random-string`; `ADMIN_USERNAME`/`ADMIN_PASSWORD` must be `admin`/`admin` |
+| `docker-compose.yml` | `SECRET_KEY` must still be the placeholder `change-me-use-a-long-random-string`; `ADMIN_USERNAME` must be `admin`, and **`ADMIN_PASSWORD` must stay commented out** — uncommenting it turns off the generated first-run password for everyone who deploys from this file |
 
 ### Post-purge verification
 
 After deleting the above, restart the container (`docker compose restart`). On startup:
-- `_seed_admin` recreates `app.db` with only the default `admin/admin` user
+- `_seed_admin` recreates `app.db` with one admin user, whose password is generated and printed to stdout (`docker compose logs libation`)
 - No Audible accounts are connected
 - The Liberate page shows "no accounts" empty state
 - `/audiobooks/` directory exists but is empty
