@@ -129,9 +129,14 @@ the ID token is verified against the provider's published signing keys.
 
    `OIDC_ISSUER` is the base URL — discovery is read from
    `{issuer}/.well-known/openid-configuration`.
-3. Behind a reverse proxy, also set `OIDC_REDIRECT_URL` to the exact callback
-   URL you registered. Without it the URL is derived from the incoming request,
-   which gets the internal scheme and host wrong.
+3. Register the callback URL with your provider as
+   `https://<your-host>/api/auth/oidc/callback`. A trailing slash is accepted
+   too, so an entry ending in `/callback/` works as well.
+
+   Behind a reverse proxy the callback URL is derived from `X-Forwarded-Proto`
+   and `X-Forwarded-Host`, so it comes out right without further configuration.
+   If your proxy does not set those headers, set `OIDC_REDIRECT_URL` to the
+   exact URL you registered.
 
 **Password sign-in turns itself off**
 
@@ -163,7 +168,7 @@ rights in the app instead.
 | `OIDC_ISSUER` | — | Provider base URL |
 | `OIDC_CLIENT_ID` | — | Client id |
 | `OIDC_CLIENT_SECRET` | — | Client secret |
-| `OIDC_REDIRECT_URL` | derived | Exact callback URL; **required behind a proxy** |
+| `OIDC_REDIRECT_URL` | derived | Exact callback URL; only needed if your proxy sends no `X-Forwarded-*` headers |
 | `OIDC_SCOPES` | `openid profile email` | Requested scopes |
 | `OIDC_PROVIDER_NAME` | `SSO` | Label on the sign-in button |
 | `OIDC_USERNAME_CLAIM` | `preferred_username` | Claim used for the username |

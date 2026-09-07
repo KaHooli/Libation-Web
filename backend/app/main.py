@@ -197,14 +197,31 @@ def health():
     return JSONResponse({"status": "ok", "version": APP_VERSION})
 
 
-# Serve React build — must come after API routes
-STATIC_DIR = "/app/static"
+# Serve React build — must come after API routes.
+# Overridable so the SPA fallback can be exercised by the test suite, which has
+# no /app to write to; the default is where the Dockerfile puts the build.
+STATIC_DIR = os.environ.get("STATIC_DIR", "/app/static")
 if os.path.isdir(STATIC_DIR):
     app.mount("/assets", StaticFiles(directory=f"{STATIC_DIR}/assets"), name="assets")
 
+    _STATIC_ROOT = Path(STATIC_DIR).resolve()
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
-        candidate = Path(STATIC_DIR) / full_path
-        if candidate.is_file():
+        # This route matches *every* path, so it — not Starlette's own
+        # redirect-slashes fallback — is what an unmatched /api request lands
+        # on. Answering those with index.html turns a missing endpoint into
+        # HTTP 200 full of HTML: it is how a redirect URI registered with a
+        # trailing slash made OIDC sign-in fail silently, and it hands the
+        # frontend an HTML body everywhere it expects JSON.
+        if full_path == "api" or full_path.startswith("api/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+        # `full_path` is whatever was on the wire, `..` segments included —
+        # nothing upstream normalises them — so resolve before trusting it.
+        # Without this, /../../config/potation.key reads the key that decrypts
+        # stored Audible credentials.
+        candidate = (_STATIC_ROOT / full_path).resolve()
+        if candidate.is_relative_to(_STATIC_ROOT) and candidate.is_file():
             return FileResponse(str(candidate))
-        return FileResponse(f"{STATIC_DIR}/index.html")
+        return FileResponse(str(_STATIC_ROOT / "index.html"))

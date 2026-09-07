@@ -107,7 +107,7 @@
     <Variable>
       <Value/>
       <Name>OIDC_REDIRECT_URL</Name>
-      <Description>Optional but required if you reach Libation through a reverse proxy. The exact callback URL registered with your provider, e.g. https://libation.example.com/api/auth/oidc/callback</Description>
+      <Description>Optional. The callback URL is derived from the request and honours X-Forwarded-Proto/-Host, so it is correct behind a reverse proxy. Set this only if your proxy sends no X-Forwarded-* headers; it must then match what you registered exactly, e.g. https://libation.example.com/api/auth/oidc/callback</Description>
       <Mode/>
     </Variable>
     <Variable>
