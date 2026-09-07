@@ -15,6 +15,7 @@ from ..schemas.auth import (
 from ..schemas.users import SessionResponse
 from ..services import auth as auth_svc
 from ..services import oidc as oidc_svc
+from ..services import oidc_config
 from ..services.logger import get_logger
 from ..config import settings
 from ..limiter import limiter
@@ -40,13 +41,13 @@ def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(COOKIE_NAME, path="/api/auth")
 
 
-def _require_password_login() -> None:
+def _require_password_login(db: Session) -> None:
     """Refuse username/password sign-in when the deployment has turned it off.
 
     Set ALLOW_PASSWORD_LOGIN=true to bring it back — the way out if the identity
     provider is misconfigured and nobody can get in.
     """
-    if not settings.password_login_enabled:
+    if not oidc_config.password_login_enabled(db):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
@@ -74,7 +75,7 @@ def get_current_user(
 @router.post("/login", response_model=TokenResponse | TwoFactorRequiredResponse)
 @limiter.limit("20/minute")
 def login(body: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    _require_password_login()
+    _require_password_login(db)
     user = auth_svc.authenticate_user(db, body.username, body.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -100,7 +101,7 @@ def login(body: LoginRequest, request: Request, response: Response, db: Session 
 def verify_2fa(body: TwoFactorRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     # The 2FA step only ever follows a password login, so it is gated too —
     # otherwise a temp token minted before the switch would still complete.
-    _require_password_login()
+    _require_password_login(db)
     user_id = auth_svc.decode_token(body.temp_token, "2fa_pending")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired 2FA session")
@@ -127,21 +128,17 @@ def verify_2fa(body: TwoFactorRequest, request: Request, response: Response, db:
 # ── Single sign-on ────────────────────────────────────────────────────────────
 
 @router.get("/config")
-def auth_config():
+def auth_config(db: Session = Depends(get_db)):
     """What sign-in methods this deployment offers.
 
     Public and unauthenticated by necessity — the login page reads it before
     anyone has credentials. It exposes only which methods exist, never the
     issuer, client id or secret.
     """
-    return {
-        "password_login_enabled": settings.password_login_enabled,
-        "oidc_enabled": settings.oidc_configured,
-        "oidc_provider_name": settings.OIDC_PROVIDER_NAME,
-    }
+    return oidc_config.public_config(db)
 
 
-def _oidc_redirect_uri(request: Request) -> str:
+def _oidc_redirect_uri(request: Request, cfg) -> str:
     """The callback URL registered with the provider.
 
     Derived from the request when OIDC_REDIRECT_URL is blank, which is correct
@@ -149,7 +146,7 @@ def _oidc_redirect_uri(request: Request) -> str:
     TLS or rewrites the host, set it explicitly — uvicorn is not started with
     --proxy-headers, so the derived URL would use the internal scheme and host.
     """
-    configured = settings.OIDC_REDIRECT_URL.strip()
+    configured = cfg.redirect_url.strip()
     if configured:
         return configured
     return str(request.url_for("oidc_callback"))
@@ -164,13 +161,14 @@ def _login_page_redirect(error: str | None = None, next_path: str | None = None)
 
 @router.get("/oidc/login")
 def oidc_login(request: Request, next: str | None = None, db: Session = Depends(get_db)):
-    if not settings.oidc_configured:
+    cfg = oidc_config.load_config(db)
+    if not cfg.configured:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Single sign-on is not configured",
         )
     try:
-        url = oidc_svc.begin_login(db, _oidc_redirect_uri(request), next)
+        url = oidc_svc.begin_login(db, cfg, _oidc_redirect_uri(request, cfg), next)
     except oidc_svc.OidcError as exc:
         get_logger().error("[oidc] Could not start sign-in: %s", exc)
         return _login_page_redirect(error=str(exc))
@@ -192,7 +190,8 @@ def oidc_callback(
     already calls /api/auth/refresh on load, so the access token never has to
     travel in a URL where it would land in history and proxy logs.
     """
-    if not settings.oidc_configured:
+    cfg = oidc_config.load_config(db)
+    if not cfg.configured:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Single sign-on is not configured",
@@ -205,7 +204,7 @@ def oidc_callback(
         return _login_page_redirect(error="The provider's response was incomplete.")
 
     try:
-        user, next_path = oidc_svc.complete_login(db, code, state)
+        user, next_path = oidc_svc.complete_login(db, cfg, code, state)
     except oidc_svc.OidcError as exc:
         get_logger().warning("[oidc] Sign-in failed: %s", exc)
         return _login_page_redirect(error=str(exc))
@@ -222,19 +221,78 @@ def oidc_callback(
     return redirect
 
 
+def _oidc_settings_payload(db: Session) -> dict:
+    """The configuration as the admin UI needs to see it.
+
+    The client secret never goes out — only whether one is stored. `env_locked`
+    tells the UI which fields the environment pins, so it can render those
+    read-only instead of accepting an edit that `save_config` would discard.
+    """
+    cfg = oidc_config.load_config(db)
+    return {
+        "enabled": cfg.enabled,
+        "issuer": cfg.issuer,
+        "client_id": cfg.client_id,
+        "client_secret_set": bool(cfg.client_secret),
+        "redirect_url": cfg.redirect_url,
+        "scopes": cfg.scopes,
+        "provider_name": cfg.provider_name,
+        "username_claim": cfg.username_claim,
+        "email_claim": cfg.email_claim,
+        "groups_claim": cfg.groups_claim,
+        "admin_group": cfg.admin_group,
+        "auto_create_users": cfg.auto_create_users,
+        "env_locked": sorted(cfg.env_locked),
+        "configured": cfg.configured,
+        # The two facts that explain the password-login state, so the UI can
+        # say *why* rather than just showing a toggle that will not move.
+        "sso_has_worked": oidc_config.sso_has_worked(db, cfg),
+        "password_login_enabled": oidc_config.password_login_enabled(db),
+        "password_login_forced": settings.ALLOW_PASSWORD_LOGIN is not None,
+    }
+
+
+@router.get("/oidc/settings")
+def get_oidc_settings(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    return _oidc_settings_payload(db)
+
+
+@router.put("/oidc/settings")
+def put_oidc_settings(
+    body: dict,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Save the SSO configuration. Admin only.
+
+    An omitted `client_secret` keeps the stored one; `""` clears it. The UI
+    never receives the secret, so it cannot send it back on an unrelated edit.
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    oidc_config.save_config(db, body)
+    # Discovery and JWKS are cached per issuer; a settings change must not keep
+    # answering from the previous provider's documents.
+    oidc_svc.clear_cache()
+    return _oidc_settings_payload(db)
+
+
 @router.post("/oidc/test")
-def oidc_test(current_user=Depends(get_current_user)):
+def oidc_test(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     """Reach the provider and report what discovery returned. Admin only."""
     if not current_user.is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
-    if not settings.oidc_configured:
+    cfg = oidc_config.load_config(db)
+    if not cfg.configured:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Single sign-on is not configured",
         )
     oidc_svc.clear_cache()
     try:
-        return oidc_svc.provider_check()
+        return oidc_svc.provider_check(cfg)
     except oidc_svc.OidcError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 

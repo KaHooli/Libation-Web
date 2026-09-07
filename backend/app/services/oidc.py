@@ -30,10 +30,10 @@ from jose import jwt
 from jose.exceptions import JWTError
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from ..models.user import OidcLoginState, User
 from .auth import hash_password
 from .logger import get_logger
+from .oidc_config import OidcConfig
 
 #: How long a started login may sit unfinished.
 LOGIN_STATE_TTL = timedelta(minutes=10)
@@ -77,13 +77,9 @@ def clear_cache() -> None:
     _cache.clear()
 
 
-def _issuer() -> str:
-    return settings.OIDC_ISSUER.strip().rstrip("/")
-
-
-def discovery() -> dict:
+def discovery(cfg: OidcConfig) -> dict:
     """The provider's OpenID configuration document."""
-    issuer = _issuer()
+    issuer = cfg.normalized_issuer
     if not issuer:
         raise OidcError("No OIDC issuer is configured.")
 
@@ -107,8 +103,8 @@ def discovery() -> dict:
     return _store(key, doc)
 
 
-def jwks() -> dict:
-    uri = discovery()["jwks_uri"]
+def jwks(cfg: OidcConfig) -> dict:
+    uri = discovery(cfg)["jwks_uri"]
     key = f"jwks:{uri}"
     cached = _cached(key)
     if cached is not None:
@@ -124,12 +120,12 @@ def jwks() -> dict:
     return _store(key, doc)
 
 
-def provider_check() -> dict:
+def provider_check(cfg: OidcConfig) -> dict:
     """Reach the provider and report what was found. For the settings UI."""
-    doc = discovery()
-    keys = jwks().get("keys", [])
+    doc = discovery(cfg)
+    keys = jwks(cfg).get("keys", [])
     return {
-        "issuer": doc.get("issuer", _issuer()),
+        "issuer": doc.get("issuer", cfg.normalized_issuer),
         "authorization_endpoint": doc.get("authorization_endpoint"),
         "token_endpoint": doc.get("token_endpoint"),
         "signing_keys": len(keys),
@@ -159,9 +155,10 @@ def _prune_expired(db: Session) -> None:
     ).delete(synchronize_session=False)
 
 
-def begin_login(db: Session, redirect_uri: str, next_path: Optional[str] = None) -> str:
+def begin_login(db: Session, cfg: OidcConfig, redirect_uri: str,
+                next_path: Optional[str] = None) -> str:
     """Record a pending login and return the URL to send the browser to."""
-    doc = discovery()
+    doc = discovery(cfg)
     verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
@@ -179,9 +176,9 @@ def begin_login(db: Session, redirect_uri: str, next_path: Optional[str] = None)
 
     params = {
         "response_type": "code",
-        "client_id": settings.OIDC_CLIENT_ID.strip(),
+        "client_id": cfg.client_id.strip(),
         "redirect_uri": redirect_uri,
-        "scope": settings.OIDC_SCOPES,
+        "scope": cfg.scopes,
         "state": state,
         "nonce": nonce,
         "code_challenge": challenge,
@@ -212,10 +209,10 @@ def _consume_state(db: Session, state: str) -> OidcLoginState:
     return row
 
 
-def _exchange_code(code: str, redirect_uri: str, verifier: str) -> dict:
-    doc = discovery()
-    client_id = settings.OIDC_CLIENT_ID.strip()
-    client_secret = settings.OIDC_CLIENT_SECRET.strip()
+def _exchange_code(cfg: OidcConfig, code: str, redirect_uri: str, verifier: str) -> dict:
+    doc = discovery(cfg)
+    client_id = cfg.client_id.strip()
+    client_secret = cfg.client_secret.strip()
 
     data = {
         "grant_type": "authorization_code",
@@ -253,8 +250,9 @@ def _exchange_code(code: str, redirect_uri: str, verifier: str) -> dict:
     return payload
 
 
-def _validate_id_token(id_token: str, access_token: Optional[str], nonce: str) -> dict:
-    doc = discovery()
+def _validate_id_token(cfg: OidcConfig, id_token: str, access_token: Optional[str],
+                       nonce: str) -> dict:
+    doc = discovery(cfg)
     advertised = doc.get("id_token_signing_alg_values_supported") or ["RS256"]
     algorithms = sorted(set(advertised) & ALLOWED_ALGORITHMS)
     if not algorithms:
@@ -266,10 +264,10 @@ def _validate_id_token(id_token: str, access_token: Optional[str], nonce: str) -
     try:
         claims = jwt.decode(
             id_token,
-            jwks(),
+            jwks(cfg),
             algorithms=algorithms,
-            audience=settings.OIDC_CLIENT_ID.strip(),
-            issuer=doc.get("issuer", _issuer()),
+            audience=cfg.client_id.strip(),
+            issuer=doc.get("issuer", cfg.normalized_issuer),
             access_token=access_token,
             options={"verify_at_hash": access_token is not None},
         )
@@ -285,11 +283,11 @@ def _validate_id_token(id_token: str, access_token: Optional[str], nonce: str) -
 
 # ── Mapping claims onto a local user ──────────────────────────────────────────
 
-def _derive_username(claims: dict) -> str:
+def _derive_username(cfg: OidcConfig, claims: dict) -> str:
     for value in (
-        claims.get(settings.OIDC_USERNAME_CLAIM),
+        claims.get(cfg.username_claim),
         claims.get("preferred_username"),
-        claims.get(settings.OIDC_EMAIL_CLAIM),
+        claims.get(cfg.email_claim),
         claims.get("email"),
     ):
         text = (value or "").strip() if isinstance(value, str) else ""
@@ -303,12 +301,12 @@ def _unusable_password() -> str:
     return hash_password(secrets.token_urlsafe(64))
 
 
-def _is_admin_by_group(claims: dict) -> Optional[bool]:
+def _is_admin_by_group(cfg: OidcConfig, claims: dict) -> Optional[bool]:
     """True/False when the group mapping is configured, None when it is not."""
-    group = settings.OIDC_ADMIN_GROUP.strip()
+    group = cfg.admin_group.strip()
     if not group:
         return None
-    raw = claims.get(settings.OIDC_GROUPS_CLAIM)
+    raw = claims.get(cfg.groups_claim)
     if isinstance(raw, str):
         groups = [raw]
     elif isinstance(raw, (list, tuple)):
@@ -318,12 +316,12 @@ def _is_admin_by_group(claims: dict) -> Optional[bool]:
     return group in groups
 
 
-def provision_user(db: Session, claims: dict) -> User:
+def provision_user(db: Session, cfg: OidcConfig, claims: dict) -> User:
     """Find, link or create the local user this token identifies."""
     logger = get_logger()
-    issuer = str(claims.get("iss") or _issuer())
+    issuer = str(claims.get("iss") or cfg.normalized_issuer)
     subject = str(claims["sub"])
-    email = (claims.get(settings.OIDC_EMAIL_CLAIM) or claims.get("email") or "").strip() or None
+    email = (claims.get(cfg.email_claim) or claims.get("email") or "").strip() or None
 
     user = db.query(User).filter(User.oidc_subject == subject).first()
     if user is not None and user.oidc_issuer and user.oidc_issuer != issuer:
@@ -332,7 +330,7 @@ def provision_user(db: Session, claims: dict) -> User:
         raise OidcError("This account is linked to a different identity provider.")
 
     if user is None:
-        username = _derive_username(claims)
+        username = _derive_username(cfg, claims)
         # Link an existing local account, by email first because it is the
         # claim least likely to collide, then by username.
         candidates = []
@@ -349,7 +347,7 @@ def provision_user(db: Session, claims: dict) -> User:
                 )
             user = existing
             logger.info("[oidc] Linked existing user %r to subject %s", user.username, subject)
-        elif settings.OIDC_AUTO_CREATE_USERS:
+        elif cfg.auto_create_users:
             # First user in an empty install becomes admin, mirroring _seed_admin.
             first_user = db.query(User.id).first() is None
             user = User(
@@ -369,7 +367,7 @@ def provision_user(db: Session, claims: dict) -> User:
     user.oidc_subject = subject
     user.oidc_issuer = issuer
 
-    admin_by_group = _is_admin_by_group(claims)
+    admin_by_group = _is_admin_by_group(cfg, claims)
     if admin_by_group is not None:
         user.is_admin = admin_by_group
 
@@ -381,11 +379,12 @@ def provision_user(db: Session, claims: dict) -> User:
     return user
 
 
-def complete_login(db: Session, code: str, state: str) -> tuple[User, Optional[str]]:
+def complete_login(db: Session, cfg: OidcConfig, code: str,
+                   state: str) -> tuple[User, Optional[str]]:
     """Validate the callback and return the signed-in user and where to send them."""
     row = _consume_state(db, state)
-    tokens = _exchange_code(code, row.redirect_uri, row.code_verifier)
+    tokens = _exchange_code(cfg, code, row.redirect_uri, row.code_verifier)
     claims = _validate_id_token(
-        tokens["id_token"], tokens.get("access_token"), row.nonce
+        cfg, tokens["id_token"], tokens.get("access_token"), row.nonce
     )
-    return provision_user(db, claims), row.next_path
+    return provision_user(db, cfg, claims), row.next_path

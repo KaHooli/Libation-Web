@@ -98,9 +98,14 @@ _UPSERT_IGNORE = text(
 
 def system_setting_defaults() -> dict[str, str]:
     from .services.chaptarr import SETTING_KEYS as CHAPTARR_SETTING_KEYS
+    from .services.oidc_config import SETTING_KEYS as OIDC_SETTING_KEYS
 
     defaults: dict[str, str] = {"last_auto_download_at": ""}
     defaults.update(CHAPTARR_SETTING_KEYS)
+    # Seeded empty. `load_config` reads an empty value as "not configured" and
+    # falls back to the dataclass default, so an unseeded install and a
+    # never-touched one behave identically.
+    defaults.update({key: "" for key in OIDC_SETTING_KEYS})
     return defaults
 
 
