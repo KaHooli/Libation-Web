@@ -32,6 +32,17 @@ class Settings(BaseSettings):
 
     BRIDGE_URL: str = "http://localhost:8001"
 
+    #: Hand Audible accounts to the native Potation engine instead of
+    #: LibationCli. Off by default: turning it on is a migration, not a
+    #: preference — the stored credentials are LibationCli's and cannot be
+    #: converted, so every account must be connected again (the downloaded files
+    #: are untouched, and reconciliation matches them back).
+    #:
+    #: Deliberately scoped to accounts and library sync. The download path stays
+    #: on LibationCli whatever this says, because `liberated` is state both
+    #: engines own and dual-running them means racing over it.
+    POTATION_ENGINE: bool = False
+
     # ── OIDC single sign-on ───────────────────────────────────────────────
     OIDC_ENABLED: bool = False
     #: Issuer base URL. Discovery is read from {issuer}/.well-known/openid-configuration.
